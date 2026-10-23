@@ -13,10 +13,13 @@
 - CM1002: suggests `Map<TSource, TDestination>` when the source type is known, with a code fix.
 
 ### Performance
-- Nested maps and collections are compiled inline into the fast-path delegate: typed `for` loops over arrays and `List<T>`, struct enumerators for other sources, child maps expanded in place. Order with flattening and a 5-line list: 224 ns → 109 ns (Mapster 123 ns, AutoMapper 203 ns).
-- `Condition`, `PreCondition` and `NullSubstitute` on directly assignable members are compiled instead of interpreted, and maps that need a context are called straight from the static cache without the engine's type-map lookup. A map with a condition: 192 ns → 69 ns (AutoMapper 86 ns).
+- Nested maps and collections are compiled inline into the fast-path delegate: typed `for` loops over arrays and `List<T>`, struct enumerators for other sources, child maps expanded in place. Order with flattening and a 5-line list: 224 ns → 109 ns (Mapster 123 ns).
+- `Condition`, `PreCondition` and `NullSubstitute` on directly assignable members are compiled instead of interpreted, and maps that need a context are called straight from the static cache without the engine's type-map lookup. A map with a condition: 192 ns → 69 ns.
 - `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call (280 B → 80 B). `cfg.DisableContextPooling()` turns it off.
 - The root type name used in error messages is only computed when an error occurs.
+
+### Attributes
+- `[MappedFrom(typeof(Source))]` declares an attribute map. The 1.x attribute still works but is obsolete and hidden from IntelliSense.
 
 ### Packaging
 - Package validation against the latest published version (1.1.0) for release builds.
@@ -41,8 +44,8 @@
 ### Packaging and tooling
 - Package icon, package validation, trimming / Native AOT annotations (`RequiresUnreferencedCode`, `RequiresDynamicCode`) on the configuration and DI entry points.
 - CI runs the tests on Linux and on Windows, including .NET Framework 4.8 for the netstandard2.0 build.
-- BenchmarkDotNet project comparing ConventionMapper with hand-written code, Mapster and AutoMapper.
-- ASP.NET Core + EF Core sample app and an AutoMapper migration guide.
+- BenchmarkDotNet project comparing ConventionMapper with hand-written code and Mapster.
+- ASP.NET Core + EF Core sample app.
 
 ## 1.0.0 (2026-10-23)
 

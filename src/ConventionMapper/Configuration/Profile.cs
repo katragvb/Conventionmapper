@@ -164,17 +164,29 @@ namespace ConventionMapper
                 AttributeProfile? attributeProfile = null;
                 foreach (var type in types)
                 {
+                    foreach (var attribute in type.GetCustomAttributes<MappedFromAttribute>(false))
+                    {
+                        attributeProfile ??= new AttributeProfile("AttributeMaps:" + assembly.GetName().Name);
+                        AddAttributeMap(attributeProfile, type, attribute.SourceType, attribute.MemberList, attribute.MaxDepth, attribute.PreserveReferences, attribute.ReverseMap);
+                    }
+#pragma warning disable CS0618 // legacy attribute, still honoured
                     foreach (var attribute in type.GetCustomAttributes<AutoMapAttribute>(false))
                     {
                         attributeProfile ??= new AttributeProfile("AttributeMaps:" + assembly.GetName().Name);
-                        var map = attributeProfile.CreateMap(attribute.SourceType, type, attribute.MemberList);
-                        if (attribute.MaxDepth > 0) map.MaxDepth(attribute.MaxDepth);
-                        if (attribute.PreserveReferences) map.PreserveReferences();
-                        if (attribute.ReverseMap) map.ReverseMap();
+                        AddAttributeMap(attributeProfile, type, attribute.SourceType, attribute.MemberList, attribute.MaxDepth, attribute.PreserveReferences, attribute.ReverseMap);
                     }
+#pragma warning restore CS0618
                 }
                 if (attributeProfile != null) AddProfile(attributeProfile);
             }
+        }
+
+        private static void AddAttributeMap(AttributeProfile profile, Type destinationType, Type sourceType, MemberList memberList, int maxDepth, bool preserveReferences, bool reverseMap)
+        {
+            var map = profile.CreateMap(sourceType, destinationType, memberList);
+            if (maxDepth > 0) map.MaxDepth(maxDepth);
+            if (preserveReferences) map.PreserveReferences();
+            if (reverseMap) map.ReverseMap();
         }
 
         public void ConstructServicesUsing(Func<Type, object> constructor) => ServiceCtorValue = constructor;

@@ -12,7 +12,7 @@ namespace Microsoft.Extensions.DependencyInjection
     /// <summary>
     /// <c>services.AddConventionMapper(cfg =&gt; cfg.CreateMap&lt;Foo, FooDto&gt;(), typeof(Program));</c>
     /// Registers IConfigurationProvider/MapperConfiguration (singleton) and IMapper (transient), adds every Profile
-    /// and [AutoMap] type found in the given assemblies, and registers implementations of IValueResolver,
+    /// and [MappedFrom] type found in the given assemblies, and registers implementations of IValueResolver,
     /// IMemberValueResolver, ITypeConverter, IValueConverter, ICondition, IPreCondition and IMappingAction as transient.
     /// Can be called multiple times; configuration accumulates.
     /// </summary>

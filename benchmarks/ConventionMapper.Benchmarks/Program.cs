@@ -5,7 +5,6 @@ using System.Linq;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using Mapster;
-using AM = AutoMapper;
 using CM = ConventionMapper;
 
 public class Person
@@ -53,7 +52,6 @@ public class FlatBenchmarks
 {
     private readonly Person _person = new Person { Id = 1, FirstName = "Ada", LastName = "Lovelace", Email = "ada@example.com", Age = 36, BirthDate = new DateTime(1815, 12, 10), IsActive = true, Score = 99.5m };
     private CM.IMapper _cm, _cmInterpreted;
-    private AM.IMapper _am;
     private TypeAdapterConfig _mapster;
 
     [GlobalSetup]
@@ -63,7 +61,6 @@ public class FlatBenchmarks
         cm.CompileMappings();
         _cm = cm.CreateMapper();
         _cmInterpreted = new CM.MapperConfiguration(cfg => { cfg.UseCompiledMappings = false; cfg.CreateMap<Person, PersonDto>(); }).CreateMapper();
-        _am = new AM.MapperConfiguration(cfg => cfg.CreateMap<Person, PersonDto>()).CreateMapper();
         _mapster = new TypeAdapterConfig();
         _mapster.NewConfig<Person, PersonDto>();
         _mapster.Compile();
@@ -81,7 +78,6 @@ public class FlatBenchmarks
     [Benchmark] public PersonDto ConventionMapper_ObjectOverload() => _cm.Map<PersonDto>(_person);
     [Benchmark] public PersonDto ConventionMapper_Interpreted() => _cmInterpreted.Map<Person, PersonDto>(_person);
     [Benchmark] public PersonDto Mapster() => _person.Adapt<PersonDto>(_mapster);
-    [Benchmark] public PersonDto AutoMapper() => _am.Map<Person, PersonDto>(_person);
 }
 
 [MemoryDiagnoser]
@@ -94,7 +90,6 @@ public class NestedBenchmarks
         Lines = Enumerable.Range(1, 5).Select(i => new Line { Product = "P" + i, Quantity = i, Price = i * 1.5m }).ToList()
     };
     private CM.IMapper _cm;
-    private AM.IMapper _am;
     private TypeAdapterConfig _mapster;
 
     [GlobalSetup]
@@ -103,7 +98,6 @@ public class NestedBenchmarks
         var cm = new CM.MapperConfiguration(cfg => { cfg.CreateMap<Order, OrderDto>(); cfg.CreateMap<Line, LineDto>(); });
         cm.CompileMappings();
         _cm = cm.CreateMapper();
-        _am = new AM.MapperConfiguration(cfg => { cfg.CreateMap<Order, OrderDto>(); cfg.CreateMap<Line, LineDto>(); }).CreateMapper();
         _mapster = new TypeAdapterConfig();
         _mapster.NewConfig<Order, OrderDto>();
         _mapster.NewConfig<Line, LineDto>();
@@ -122,7 +116,6 @@ public class NestedBenchmarks
     [Benchmark] public OrderDto ConventionMapper() => _cm.Map<Order, OrderDto>(_order);
     [Benchmark] public OrderDto ConventionMapper_Generated() => GeneratedMappers.ToDto(_order);
     [Benchmark] public OrderDto Mapster() => _order.Adapt<OrderDto>(_mapster);
-    [Benchmark] public OrderDto AutoMapper() => _am.Map<Order, OrderDto>(_order);
 }
 
 /// <summary>A map with a condition needs a per-call ResolutionContext: this measures context pooling.</summary>
@@ -131,7 +124,6 @@ public class ContextBenchmarks
 {
     private readonly Person _person = new Person { Id = 1, FirstName = "Ada", LastName = "Lovelace", Email = "ada@example.com", Age = 36, BirthDate = new DateTime(1815, 12, 10), IsActive = true, Score = 99.5m };
     private CM.IMapper _pooled, _unpooled;
-    private AM.IMapper _am;
 
     private static void Configure(CM.IMapperConfigurationExpression cfg) =>
         cfg.CreateMap<Person, PersonDto>().ForMember(d => d.Email, o => o.Condition((s, d, sm, dm, ctx) => ctx != null));
@@ -145,13 +137,10 @@ public class ContextBenchmarks
         var unpooled = new CM.MapperConfiguration(cfg => { CM.ContextPoolingExtensions.DisableContextPooling(cfg); Configure(cfg); });
         unpooled.CompileMappings();
         _unpooled = unpooled.CreateMapper();
-        _am = new AM.MapperConfiguration(cfg =>
-            cfg.CreateMap<Person, PersonDto>().ForMember(d => d.Email, o => o.Condition((s, d, m, dm, ctx) => true))).CreateMapper();
     }
 
     [Benchmark(Baseline = true)] public PersonDto ConventionMapper_Pooled() => _pooled.Map<Person, PersonDto>(_person);
     [Benchmark] public PersonDto ConventionMapper_Unpooled() => _unpooled.Map<Person, PersonDto>(_person);
-    [Benchmark] public PersonDto AutoMapper() => _am.Map<Person, PersonDto>(_person);
 }
 
 public static class Program

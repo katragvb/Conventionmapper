@@ -19,7 +19,7 @@
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
     <Description>Build-time object mapping for .NET. Declare partial mapping methods in a [GeneratedMapper] class and ConventionMapper writes plain C# mapping code into your project at compile time: no reflection, Native AOT and trimming safe, as fast as hand-written code and debuggable. Unmapped members are build errors.</Description>
-    <PackageTags>mapper;object-mapper;mapping;dto;source-generator;roslyn;aot;automapper-alternative</PackageTags>
+    <PackageTags>mapper;object-mapper;mapping;dto;source-generator;roslyn;aot;compile-time;codegen</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>

@@ -4,7 +4,7 @@
 [![Downloads](https://img.shields.io/nuget/dt/ConventionMapper.svg)](https://www.nuget.org/packages/ConventionMapper)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/katragvb/Conventionmapper/blob/main/LICENSE)
 
-A fast, convention-based object-object mapper for .NET. It removes the boring code that copies one object into another (entities → DTOs, view models, API contracts), with an API that will feel familiar if you have used AutoMapper.
+A fast, convention-based object-object mapper for .NET. It removes the boring code that copies one object into another (entities → DTOs, view models, API contracts) with conventions, profiles and compiled mapping code.
 
 Targets **.NET Standard 2.0** (works on .NET Framework 4.6.1+, .NET Core, Unity, Xamarin) and **.NET 8+**.
 
@@ -14,7 +14,7 @@ dotnet add package ConventionMapper
 
 ## Why ConventionMapper
 
-* **Familiar API.** Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration work the way AutoMapper users expect, so migrating is mostly a rename. See the [migration guide](https://github.com/katragvb/Conventionmapper/blob/main/docs/migrating-from-automapper.md).
+* **Convention first.** Matching names, flattening, `Get` methods, constructors and records map with no configuration. Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration cover everything else.
 * **Build-time code generation.** The `ConventionMapper.SourceGenerator` package writes plain C# mapping code into your project at compile time: no reflection, Native AOT and trimming safe, as fast as hand-written code, and unmapped members are build errors. See [Build-time mapping](#build-time-mapping-source-generator).
 * **Mistakes caught while typing.** A bundled analyzer flags unmapped members in `CreateMap<,>()` in the IDE, with one-click fixes. See [Analyzers](#analyzers).
 * **Compiled for speed.** Every map is compiled into a single typed delegate with direct, non-boxing assignments, and simple maps skip per-call overhead entirely through a static generic cache. See [Performance](#performance).
@@ -25,7 +25,7 @@ dotnet add package ConventionMapper
 
 ### How it works
 
-1. **One compiled delegate per map.** The first time a map is used, it is compiled into a strongly typed expression tree, the same technique Mapster and AutoMapper use. `Person → PersonDto` becomes the equivalent of `new PersonDto { Id = src.Id, Name = src.Name, ... }`.
+1. **One compiled delegate per map.** The first time a map is used, it is compiled into a strongly typed expression tree. `Person → PersonDto` becomes the equivalent of `new PersonDto { Id = src.Id, Name = src.Name, ... }`.
 2. **Direct assignments, no boxing.** Numbers, dates, enums, strings and flattened paths such as `Customer.Address.City` are copied directly, with null-safe navigation. Conditions, pre-conditions and null substitutes compile to plain `if` checks. Only members that genuinely need more (resolvers, custom conversions) call into the engine, member by member, so results are identical to the interpreter.
 3. **Nested maps and collections inlined.** On the fast path, child maps are expanded in place and collections are filled by typed loops (`for` over arrays and `List<T>`, the type's own struct enumerator otherwise), with no per-element delegate calls and no boxed enumerators. Existing destination objects and collections are reused exactly as by the interpreter.
 4. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object, and `Map<TSource, TDestination>(src)` / `Map<TDestination>(src)` find them through a static generic field instead of a dictionary lookup. Maps that do need a context are called from the same cache, skipping the engine's type-map lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
@@ -41,7 +41,7 @@ cfg.UseCompiledMappings = false;   // optional: always use the interpreter
 
 ### Benchmarks
 
-The repository includes a [BenchmarkDotNet](https://benchmarkdotnet.org/) project that compares ConventionMapper (runtime and source-generated) with hand-written code, Mapster 7.4 and AutoMapper 13.0.1 (the last MIT-licensed AutoMapper release):
+The repository includes a [BenchmarkDotNet](https://benchmarkdotnet.org/) project that compares ConventionMapper (runtime and source-generated) with hand-written code and Mapster 7.4:
 
 * **Flat:** `Person → PersonDto`, 8 properties (int, string, DateTime, bool, decimal).
 * **Nested:** `Order → OrderDto` with flattening (`CustomerAddressCity`) and a list of 5 lines.
@@ -53,15 +53,14 @@ dotnet run -c Release --project benchmarks/ConventionMapper.Benchmarks -- --filt
 
 Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 8.0, AMD EPYC 9V45 GitHub Actions runner; raw reports in [`benchmarks/results`](https://github.com/katragvb/Conventionmapper/tree/main/benchmarks/results)). Lower is better.
 
-| Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 | AutoMapper 13 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Flat: 8 properties | 7.6 ns | 16.0 ns | **8.5 ns** | 15.5 ns | 42.2 ns |
-| Nested: flattening + list of 5 | 80.4 ns¹ | 63.6 ns | **57.8 ns** | 72.4 ns | 123.9 ns |
-| With a `Condition` (needs a context) | | **33.8 ns** | | | 43.2 ns |
+| Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 |
+| --- | ---: | ---: | ---: | ---: |
+| Flat: 8 properties | 7.6 ns | 16.0 ns | **8.5 ns** | 15.5 ns |
+| Nested: flattening + list of 5 | 80.4 ns¹ | 63.6 ns | **57.8 ns** | 72.4 ns |
 
 ¹ The hand-written nested version uses `Select(...).ToList()`; the mappers use pre-sized lists and indexed loops.
 
-Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B vs 464 B for AutoMapper). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
+A map with a `Condition` (which needs a `ResolutionContext`) runs in 33.8 ns. Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
 
 ### Tips for the fastest mapping
 
@@ -101,22 +100,21 @@ The `ConventionMapper` package ships a Roslyn analyzer with code fixes:
 
 Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/analyzers.md).
 
-## Exclusive built-in features
+## Built-in features
 
-Other mappers need extra packages or hand-written workarounds for these. ConventionMapper ships them in the core package.
+These ship in the core package, with no add-on packages or hand-written workarounds:
 
-| Feature | ConventionMapper | AutoMapper |
-| --- | --- | --- |
-| Build-time generated mappers (no reflection, Native AOT) | `ConventionMapper.SourceGenerator` | Not available |
-| Unmapped members reported while typing | Bundled analyzer (CM1001) + code fix | Only at runtime (`AssertConfigurationIsValid`) |
-| License | MIT, free for any use | Commercial (dual) license since v15 |
-| Update collections by key (EF Core) | Built in: `EqualityComparison(...)` | Separate `AutoMapper.Collection` package |
-| Strict, validated enum mapping | Built in: `ConvertUsingEnumMapping(...)` | Separate `AutoMapper.Extensions.EnumMapping` package |
-| PATCH mapping (skip null source values) | Built in: `mapper.Patch(dto, entity)` | Workaround with `ForAllMembers` + `Condition` |
-| Readable description of a map | `Explain()` returns plain text | `BuildExecutionPlan()` returns an expression tree |
-| Error location | Full path with collection indexes, e.g. `OrderDto.Lines[3].Product` | Source/destination types and member |
-
-Immutable collections (`ImmutableArray<T>`, `ImmutableList<T>`, `ImmutableDictionary<K,V>`, ...) are also supported as destinations with no extra dependency; Mapster needs its separate `Mapster.Immutable` package for this.
+| Feature | How |
+| --- | --- |
+| Build-time generated mappers (no reflection, Native AOT) | `ConventionMapper.SourceGenerator` package |
+| Unmapped members reported while typing | Bundled analyzer (CM1001) with a code fix |
+| Update collections by key (EF Core) | `EqualityComparison(...)` |
+| Strict, validated enum mapping | `ConvertUsingEnumMapping(...)` |
+| PATCH mapping (skip null source values) | `mapper.Patch(dto, entity)` |
+| Readable description of a map | `Explain()` returns plain text |
+| Precise error location | Full path with collection indexes, e.g. `OrderDto.Lines[3].Product` |
+| Immutable collection destinations | `ImmutableArray<T>`, `ImmutableList<T>`, `ImmutableDictionary<K,V>`, ... with no extra dependency |
+| License | MIT, free for any use |
 
 ### Update collections by key (EF Core friendly)
 
@@ -225,7 +223,7 @@ services.AddConventionMapper(cfg =>
 }, typeof(Program)); // scans the assembly containing Program
 ```
 
-This registers `MapperConfiguration` / `IConfigurationProvider` (singleton) and `IMapper` (transient). Every `Profile` and every `[AutoMap]` class in the scanned assemblies is added, and these implementations are registered as transient services so they can take constructor dependencies:
+This registers `MapperConfiguration` / `IConfigurationProvider` (singleton) and `IMapper` (transient). Every `Profile` and every `[MappedFrom]` class in the scanned assemblies is added, and these implementations are registered as transient services so they can take constructor dependencies:
 
 `IValueResolver<,,>`, `IMemberValueResolver<,,,>`, `ITypeConverter<,>`, `IValueConverter<,>`, `ICondition<,,>`, `IPreCondition<,>`, `IMappingAction<,>`.
 
@@ -332,7 +330,7 @@ Maps that can reach themselves (trees, parent/child links) automatically preserv
 ## Attributes
 
 ```csharp
-[AutoMap(typeof(Person), ReverseMap = true)]
+[MappedFrom(typeof(Person), ReverseMap = true)]
 public class PersonDto
 {
     public string FirstName { get; set; }
@@ -421,9 +419,9 @@ string[] unmapped = map.GetUnmappedPropertyNames();
 * `MapperConfigurationException`: invalid configuration (duplicate maps, unmapped members, bad `Include`, unknown source path). `Errors` lists every problem.
 * `MappingException`: a mapping failed at runtime. The message names the source/destination types and the member, and `InnerException` holds the original error.
 
-## Differences from AutoMapper
+## Not included
 
-ConventionMapper is an independent implementation, not a fork. Collection merging and strict enum mapping (separate AutoMapper packages) are built in. Not included: the ExpressionMapping, EF6 and Data extensions, logging integration and license keys, and runtime-generated proxies for interface destination types. The [migration guide](https://github.com/katragvb/Conventionmapper/blob/main/docs/migrating-from-automapper.md) lists the renames and the few unsupported APIs.
+Expression mapping (translating expressions written against DTOs), `IDataReader` mapping and runtime-generated proxies for interface destination types are not part of ConventionMapper; map to concrete classes instead.
 
 ## Trimming and Native AOT
 

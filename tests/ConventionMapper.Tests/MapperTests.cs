@@ -80,7 +80,7 @@ namespace ConventionMapper.Tests
         }
     }
 
-    [AutoMap(typeof(PersonEntity), ReverseMap = true)]
+    [MappedFrom(typeof(PersonEntity), ReverseMap = true)]
     public class PersonAttributeDto { public string FirstName { get; set; } = ""; [IgnoreMap] public string Secret { get; set; } = ""; [SourceMember("LastName")] public string Surname { get; set; } = ""; }
 
     // ----------------------------------------------------------------- tests

@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Text.RegularExpressions;
@@ -66,7 +67,24 @@ namespace ConventionMapper
     // Attribute mapping (discovered by AddMaps / AddConventionMapper assembly scanning)
     // ---------------------------------------------------------------------------------
 
-    /// <summary>Declares a map from <see cref="SourceType"/> to the decorated type.</summary>
+    /// <summary>
+    /// Declares a map from <see cref="SourceType"/> to the decorated type:
+    /// <c>[MappedFrom(typeof(Person), ReverseMap = true)] public class PersonDto { ... }</c>
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = true)]
+    public sealed class MappedFromAttribute : Attribute
+    {
+        public MappedFromAttribute(Type sourceType) { SourceType = sourceType ?? throw new ArgumentNullException(nameof(sourceType)); }
+        public Type SourceType { get; }
+        public bool ReverseMap { get; set; }
+        public int MaxDepth { get; set; }
+        public bool PreserveReferences { get; set; }
+        public MemberList MemberList { get; set; } = MemberList.Destination;
+    }
+
+    /// <summary>Kept for compatibility with 1.x; use <see cref="MappedFromAttribute"/>.</summary>
+    [Obsolete("Use [MappedFrom] instead.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
     [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = true)]
     public sealed class AutoMapAttribute : Attribute
     {

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Same target set as AutoMapper: .NET Standard 2.0 (covers .NET Framework 4.6.1+), plus modern .NET -->
+    <!-- .NET Standard 2.0 (covers .NET Framework 4.6.1+), plus modern .NET -->
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>annotations</Nullable>
@@ -19,7 +19,7 @@
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
     <Description>A convention-based object-object mapper for .NET. Flattening, unflattening (ReverseMap), profiles, value resolvers, type converters, value converters, conditions, before/after map actions, inheritance (Include/IncludeBase), constructor mapping, collections, dictionaries, enums, IQueryable projection (ProjectTo), configuration validation and Microsoft.Extensions.DependencyInjection integration. Also built in: collection merging by key (EqualityComparison), PATCH-style mapping that ignores null source values, strict enum mapping with validation, immutable collections, full member paths in error messages and Explain() for inspecting maps.</Description>
-    <PackageTags>mapper;object-mapper;mapping;dto;convention;flattening;projection;automapper-alternative</PackageTags>
+    <PackageTags>mapper;object-mapper;mapping;dto;convention;flattening;projection;profiles;compiled</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>

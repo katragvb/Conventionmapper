@@ -11,8 +11,6 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
     <PackageReference Include="Mapster" Version="7.4.0" />
-    <!-- 13.0.1 is the last AutoMapper release before the commercial license -->
-    <PackageReference Include="AutoMapper" Version="13.0.1" />
   </ItemGroup>
 
   <ItemGroup>
