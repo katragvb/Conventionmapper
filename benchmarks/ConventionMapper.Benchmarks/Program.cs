@@ -39,6 +39,15 @@ public class Order { public int Id { get; set; } public Customer Customer { get;
 public class LineDto { public string Product { get; set; } public int Quantity { get; set; } public decimal Price { get; set; } }
 public class OrderDto { public int Id { get; set; } public string CustomerName { get; set; } public string CustomerAddressCity { get; set; } public List<LineDto> Lines { get; set; } }
 
+/// <summary>Implemented at build time by ConventionMapper.SourceGenerator.</summary>
+[CM.GeneratedMapper]
+public static partial class GeneratedMappers
+{
+    public static partial PersonDto ToDto(Person person);
+    public static partial OrderDto ToDto(Order order);
+    public static partial LineDto ToDto(Line line);
+}
+
 [MemoryDiagnoser]
 public class FlatBenchmarks
 {
@@ -68,6 +77,7 @@ public class FlatBenchmarks
     };
 
     [Benchmark] public PersonDto ConventionMapper() => _cm.Map<Person, PersonDto>(_person);
+    [Benchmark] public PersonDto ConventionMapper_Generated() => GeneratedMappers.ToDto(_person);
     [Benchmark] public PersonDto ConventionMapper_ObjectOverload() => _cm.Map<PersonDto>(_person);
     [Benchmark] public PersonDto ConventionMapper_Interpreted() => _cmInterpreted.Map<Person, PersonDto>(_person);
     [Benchmark] public PersonDto Mapster() => _person.Adapt<PersonDto>(_mapster);
@@ -110,6 +120,7 @@ public class NestedBenchmarks
     };
 
     [Benchmark] public OrderDto ConventionMapper() => _cm.Map<Order, OrderDto>(_order);
+    [Benchmark] public OrderDto ConventionMapper_Generated() => GeneratedMappers.ToDto(_order);
     [Benchmark] public OrderDto Mapster() => _order.Adapt<OrderDto>(_mapster);
     [Benchmark] public OrderDto AutoMapper() => _am.Map<Order, OrderDto>(_order);
 }

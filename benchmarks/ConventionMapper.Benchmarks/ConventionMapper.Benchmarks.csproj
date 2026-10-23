@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ConventionMapper\ConventionMapper.csproj" />
+    <!-- Build-time mappers (ConventionMapper.SourceGenerator) for the *_Generated benchmarks -->
+    <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator\ConventionMapper.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>
