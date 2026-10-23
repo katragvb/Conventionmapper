@@ -140,10 +140,7 @@ public class UserCache { public int Id { get; set; } [Sensitive] public string P
         [Fact]
         public void Projections_are_expression_tree_safe()
         {
-            var result = Generate(Models + @"
-using System;
-using System.Linq;
-using System.Linq.Expressions;
+            var result = Generate("using System; using System.Linq; using System.Linq.Expressions;" + Models + @"
 public class Dest { public int Id { get; set; } public string? AddressCity { get; set; } public int Score { get; set; } }
 [GeneratedMapper] public static partial class M
 {
@@ -161,8 +158,7 @@ public class Dest { public int Id { get; set; } public string? AddressCity { get
         [Fact]
         public void Projection_reports_unmapped_members()
         {
-            var result = Generate(Models + @"
-using System.Linq;
+            var result = Generate("using System.Linq;" + Models + @"
 public class Dest { public int Id { get; set; } public string Missing { get; set; } = """"; }
 [GeneratedMapper] public static partial class M { public static partial IQueryable<Dest> Project(IQueryable<Source> q); }");
 
