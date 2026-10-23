@@ -20,6 +20,7 @@ namespace ConventionMapper.Internal
         public object? NullSubstitute;
         public bool UseDestinationValue;
         public int? MappingOrder;
+        public bool ExplicitExpansion;
         public List<ValueTransformerConfiguration> Transformers = new List<ValueTransformerConfiguration>();
 
         public bool IsExplicit => Ignored || Source != null;

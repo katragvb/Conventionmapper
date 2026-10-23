@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -28,21 +29,33 @@ namespace Microsoft.Extensions.DependencyInjection
             typeof(IMappingAction<,>)
         };
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, Action<IMapperConfigurationExpression> configAction) =>
             AddCore(services, Wrap(configAction), Array.Empty<Assembly>());
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, Action<IMapperConfigurationExpression> configAction, params Assembly[] assemblies) =>
             AddCore(services, Wrap(configAction), assemblies);
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, Action<IMapperConfigurationExpression> configAction, params Type[] profileAssemblyMarkerTypes) =>
             AddCore(services, Wrap(configAction), profileAssemblyMarkerTypes.Select(t => t.Assembly));
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, Action<IServiceProvider, IMapperConfigurationExpression> configAction, params Assembly[] assemblies) =>
             AddCore(services, configAction ?? throw new ArgumentNullException(nameof(configAction)), assemblies);
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, params Assembly[] assemblies) =>
             AddCore(services, null, assemblies);
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public static IServiceCollection AddConventionMapper(this IServiceCollection services, params Type[] profileAssemblyMarkerTypes) =>
             AddCore(services, null, profileAssemblyMarkerTypes.Select(t => t.Assembly));
 

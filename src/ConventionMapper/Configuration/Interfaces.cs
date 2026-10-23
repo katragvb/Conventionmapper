@@ -47,6 +47,12 @@ namespace ConventionMapper
         void AddMaps(params Assembly[] assembliesToScan);
         void AddMaps(params Type[] typesFromAssembliesContainingMappingDefinitions);
         void ConstructServicesUsing(Func<Type, object> constructor);
+
+        /// <summary>Compile maps into delegates on first use (default true). Set false to always use the interpreter.</summary>
+        bool UseCompiledMappings { get; set; }
+
+        /// <summary>AssertConfigurationIsValid also reports members whose source may be null while the destination is not nullable.</summary>
+        bool ValidateNullability { get; set; }
     }
 
     /// <summary>Strongly typed map configuration.</summary>
@@ -143,6 +149,9 @@ namespace ConventionMapper
         void NullSubstitute(object? nullSubstitute);
         void SetMappingOrder(int mappingOrder);
         void AddTransform(Expression<Func<TMember, TMember>> transformer);
+
+        /// <summary>ProjectTo only includes this member when it is requested in membersToExpand. Map() always maps it.</summary>
+        void ExplicitExpansion();
 
         void Condition(Func<TSource, bool> condition);
         void Condition(Func<TSource, TDestination, bool> condition);

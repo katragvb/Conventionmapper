@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using ConventionMapper.Execution;
 
 namespace ConventionMapper
 {
@@ -57,14 +58,56 @@ namespace ConventionMapper
             return _configuration.Engine.MapRoot(source, sourceType, destinationType, destination, context, options);
         }
 
-        public TDestination Map<TDestination>(object? source) =>
-            As<TDestination>(Run(source, null, source?.GetType() ?? typeof(object), typeof(TDestination), null));
+        public TDestination Map<TDestination>(object? source)
+        {
+            if (source == null) return As<TDestination>(Run(null, null, typeof(object), typeof(TDestination), null));
+
+            var sourceType = source.GetType();
+            var entries = FastMapCache<TDestination>.Entries;
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var entry = entries[i];
+                if (entry.SourceType != sourceType || !ReferenceEquals(entry.Configuration, _configuration)) continue;
+                if (entry.Map != null && TryFast(entry.Map, source, out TDestination fast)) return fast;
+                return As<TDestination>(Run(source, null, sourceType, typeof(TDestination), null));
+            }
+
+            _configuration.TryPopulateFastCacheForSource<TDestination>(sourceType);
+            return As<TDestination>(Run(source, null, sourceType, typeof(TDestination), null));
+        }
 
         public TDestination Map<TDestination>(object? source, Action<IMappingOperationOptions> opts) =>
             As<TDestination>(Run(source, null, source?.GetType() ?? typeof(object), typeof(TDestination), opts));
 
-        public TDestination Map<TSource, TDestination>(TSource source) =>
-            As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
+        public TDestination Map<TSource, TDestination>(TSource source)
+        {
+            if (source != null && (typeof(TSource).IsValueType || source.GetType() == typeof(TSource)))
+            {
+                var entry = FastMapCache<TSource, TDestination>.Entry;
+                if (entry != null && ReferenceEquals(entry.Configuration, _configuration))
+                {
+                    if (entry.Map != null && TryFast(entry.Map, source, out TDestination fast)) return fast;
+                    return As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
+                }
+            }
+            if (source != null) _configuration.TryPopulateFastCache<TSource, TDestination>();
+            return As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
+        }
+
+        /// <summary>The fast path tracks no member path; on failure the call is re-run on the full path for a precise error.</summary>
+        private static bool TryFast<TDestination>(CompiledMap map, object source, out TDestination result)
+        {
+            try
+            {
+                result = (TDestination)map(source, null, null);
+                return true;
+            }
+            catch (MappingException)
+            {
+                result = default!;
+                return false;
+            }
+        }
 
         public TDestination Map<TSource, TDestination>(TSource source, Action<IMappingOperationOptions> opts) =>
             As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), opts));

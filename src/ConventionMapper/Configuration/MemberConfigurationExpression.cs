@@ -94,6 +94,8 @@ namespace ConventionMapper.Configuration
 
         public void SetMappingOrder(int mappingOrder) => _config.MappingOrder = mappingOrder;
 
+        public void ExplicitExpansion() => _config.ExplicitExpansion = true;
+
         public void AddTransform(Expression<Func<TMember, TMember>> transformer) => _config.Transformers.Add(ValueTransformerConfiguration.Create(transformer));
 
         // ----- Conditions -----

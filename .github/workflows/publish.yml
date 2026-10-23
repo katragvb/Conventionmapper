@@ -10,7 +10,21 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]   # Windows also runs the tests on .NET Framework 4.8
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet test tests/ConventionMapper.Tests/ConventionMapper.Tests.csproj -c Release
+
+  pack:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

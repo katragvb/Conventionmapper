@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 using ConventionMapper.Configuration;
@@ -21,6 +22,9 @@ namespace ConventionMapper
         IReadOnlyCollection<TypeMap> GetAllTypeMaps();
         LambdaExpression BuildProjection(Type sourceType, Type destinationType);
         Expression<Func<TSource, TDestination>> BuildProjection<TSource, TDestination>();
+
+        /// <summary>Projection with query parameters (values for variables captured in MapFrom expressions) and explicitly expanded members.</summary>
+        LambdaExpression BuildProjection(Type sourceType, Type destinationType, object? parameters, params string[] membersToExpand);
         void CompileMappings();
 
         /// <summary>Human-readable description of how every destination member of a map is populated.</summary>
@@ -35,15 +39,22 @@ namespace ConventionMapper
         private readonly List<OpenGenericMap> _openGenericMaps = new List<OpenGenericMap>();
         private readonly ConcurrentDictionary<(Type, Type, Type), TypeMap?> _resolved = new ConcurrentDictionary<(Type, Type, Type), TypeMap?>();
         private readonly ConcurrentDictionary<TypePair, LambdaExpression> _projections = new ConcurrentDictionary<TypePair, LambdaExpression>();
+        private readonly ConcurrentDictionary<(TypePair, string), LambdaExpression> _expandedProjections = new ConcurrentDictionary<(TypePair, string), LambdaExpression>();
         private readonly List<ProfileMap> _profiles = new List<ProfileMap>();
         private readonly object _sync = new object();
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public MapperConfiguration(Action<IMapperConfigurationExpression> configure) : this(CreateExpression(configure)) { }
 
+        [RequiresUnreferencedCode(TrimMessages.Message)]
+        [RequiresDynamicCode(TrimMessages.Message)]
         public MapperConfiguration(MapperConfigurationExpression configurationExpression)
         {
             if (configurationExpression == null) throw new ArgumentNullException(nameof(configurationExpression));
             ServiceCtor = configurationExpression.ServiceCtorValue;
+            UseCompiledMappings = configurationExpression.UseCompiledMappings;
+            ValidateNullability = configurationExpression.ValidateNullability;
             RootProfile = new ProfileMap(configurationExpression, null);
             _profiles.Add(RootProfile);
             foreach (var profile in configurationExpression.Profiles) _profiles.Add(new ProfileMap(profile, RootProfile));
@@ -53,6 +64,8 @@ namespace ConventionMapper
 
         internal ProfileMap RootProfile { get; }
         internal Func<Type, object>? ServiceCtor { get; }
+        internal bool UseCompiledMappings { get; }
+        internal bool ValidateNullability { get; }
         internal MappingEngine Engine { get; }
 
         private static MapperConfigurationExpression CreateExpression(Action<IMapperConfigurationExpression> configure)
@@ -236,13 +249,78 @@ namespace ConventionMapper
         public IMapper CreateMapper() => new Mapper(this);
         public IMapper CreateMapper(Func<Type, object> serviceCtor) => new Mapper(this, serviceCtor);
 
+        /// <summary>Compiles every compilable map now instead of on first use (call at startup to avoid first-call latency).</summary>
         public void CompileMappings()
         {
-            // Accessors are compiled eagerly while sealing; nothing else to warm up.
+            if (!UseCompiledMappings) return;
+            foreach (var typeMap in _typeMaps.Values) typeMap.GetCompiledPlan(Engine.Compiler);
+        }
+
+        /// <summary>True when a runtime subtype of sourceType could select a different map to destinationType.</summary>
+        internal bool HasPotentialSubtypeMaps(Type sourceType, Type destinationType)
+        {
+            if (sourceType.IsValueType || sourceType.IsSealed) return false;
+            if (_openGenericMaps.Count > 0) return true; // closed lazily; be conservative
+            foreach (var map in _typeMaps.Values)
+                if (map.DestinationType == destinationType && map.SourceType != sourceType && sourceType.IsAssignableFrom(map.SourceType)) return true;
+            return false;
+        }
+
+        // ------------------------------------------------------------------ static fast-path caches
+
+        internal void TryPopulateFastCache<TSource, TDestination>()
+        {
+            var current = FastMapCache<TSource, TDestination>.Entry;
+            if (current != null && ReferenceEquals(current.Configuration, this)) return;
+            FastMapCache<TSource, TDestination>.Entry = CreateFastEntry(typeof(TSource), typeof(TDestination));
+        }
+
+        internal void TryPopulateFastCacheForSource<TDestination>(Type sourceType)
+        {
+            foreach (var existing in FastMapCache<TDestination>.Entries)
+                if (existing.SourceType == sourceType && ReferenceEquals(existing.Configuration, this)) return;
+
+            var entry = CreateFastEntry(sourceType, typeof(TDestination));
+            lock (FastMapCache<TDestination>.Sync)
+            {
+                var entries = new List<FastMapEntry>(FastMapCache<TDestination>.Entries);
+                if (entries.Exists(e => e.SourceType == sourceType && ReferenceEquals(e.Configuration, this))) return;
+                if (entries.Count >= 8) entries.RemoveAll(e => !ReferenceEquals(e.Configuration, this));
+                if (entries.Count >= 8) return; // further source types use the normal path
+                entries.Add(entry);
+                FastMapCache<TDestination>.Entries = entries.ToArray();
+            }
+        }
+
+        private FastMapEntry CreateFastEntry(Type sourceType, Type destinationType)
+        {
+            CompiledMap? map = null;
+            if (UseCompiledMappings &&
+                _typeMaps.TryGetValue(new TypePair(sourceType, destinationType), out var typeMap) &&
+                typeMap.DerivedMaps.Count == 0 && typeMap.TypeConverter == null)
+            {
+                var plan = typeMap.GetCompiledPlan(Engine.Compiler);
+                if (plan != null && plan.ContextFree) map = plan.Map;
+            }
+            return new FastMapEntry(this, sourceType, map);
         }
 
         public LambdaExpression BuildProjection(Type sourceType, Type destinationType) =>
             _projections.GetOrAdd(new TypePair(sourceType, destinationType), p => new ProjectionBuilder(this).Build(p.SourceType, p.DestinationType));
+
+        public LambdaExpression BuildProjection(Type sourceType, Type destinationType, object? parameters, params string[] membersToExpand)
+        {
+            var expand = (membersToExpand ?? Array.Empty<string>())
+                .Where(m => !string.IsNullOrWhiteSpace(m))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var lambda = expand.Length == 0
+                ? BuildProjection(sourceType, destinationType)
+                : _expandedProjections.GetOrAdd((new TypePair(sourceType, destinationType), string.Join("|", expand)),
+                    key => new ProjectionBuilder(this, expand).Build(sourceType, destinationType));
+            return parameters == null ? lambda : ProjectionParameters.Bind(lambda, parameters);
+        }
 
         public Expression<Func<TSource, TDestination>> BuildProjection<TSource, TDestination>() =>
             (Expression<Func<TSource, TDestination>>)BuildProjection(typeof(TSource), typeof(TDestination));
@@ -313,6 +391,15 @@ namespace ConventionMapper
                     if (map.Ignored || map.Source == null) continue;
                     if (!CanMap(map.SourceValueType, map.DestinationType, new HashSet<TypePair>()))
                         errors.Add(typeMap + ", member '" + map.DestinationName + "': cannot map " + map.SourceValueType.FullName + " to " + map.DestinationType.FullName + ". Create a map for these types or configure the member.");
+                }
+
+                if (_configuration.ValidateNullability)
+                {
+                    foreach (var map in typeMap.PropertyMaps)
+                    {
+                        var problem = NullabilityHelper.Check(typeMap, map);
+                        if (problem != null) errors.Add(problem);
+                    }
                 }
 
                 if (typeMap.ConstructorMap != null)

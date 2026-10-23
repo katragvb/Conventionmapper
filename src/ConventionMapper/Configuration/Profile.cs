@@ -100,6 +100,10 @@ namespace ConventionMapper
         private readonly HashSet<Assembly> _scannedAssemblies = new HashSet<Assembly>();
         internal Func<Type, object>? ServiceCtorValue;
 
+        public bool UseCompiledMappings { get; set; } = true;
+
+        public bool ValidateNullability { get; set; }
+
         public MapperConfigurationExpression() : base("Default") { }
 
         public void AddProfile(Profile profile)

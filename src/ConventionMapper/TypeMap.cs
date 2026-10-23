@@ -4,6 +4,8 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Threading;
+using ConventionMapper.Execution;
 using ConventionMapper.Internal;
 
 namespace ConventionMapper
@@ -60,6 +62,22 @@ namespace ConventionMapper
         internal bool IsSealing { get; set; }
         internal Func<object, object, bool>? EqualityComparison => Config.EqualityComparison;
         internal bool IgnoreNullSourceValues => Config.IgnoreNullSourceValues || Profile.IgnoreNullSourceValues;
+
+        private CompiledPlan? _compiledPlan;
+        private int _compileState;
+
+        /// <summary>Compiles the map on first use; returns null when the map must stay interpreted.</summary>
+        internal CompiledPlan? GetCompiledPlan(MapCompiler compiler)
+        {
+            if (Volatile.Read(ref _compileState) != 0) return _compiledPlan;
+            var plan = compiler.TryCompile(this);
+            _compiledPlan = plan;
+            Volatile.Write(ref _compileState, 1);
+            return plan;
+        }
+
+        internal bool IsCompiled => Volatile.Read(ref _compileState) != 0 && _compiledPlan != null;
+        internal bool IsContextFree => IsCompiled && _compiledPlan!.ContextFree;
 
         internal Func<object?, object?, ResolutionContext, object?>? TypeConverter { get; private set; }
         internal LambdaExpression? TypeConverterExpression { get; private set; }
@@ -384,6 +402,7 @@ namespace ConventionMapper
                 NullSubstitute = config.NullSubstitute;
                 UseDestinationValue = config.UseDestinationValue;
                 MappingOrder = config.MappingOrder;
+                ExplicitExpansion = config.ExplicitExpansion;
             }
         }
 
@@ -397,6 +416,9 @@ namespace ConventionMapper
         public bool HasNullSubstitute { get; }
         public object? NullSubstitute { get; }
         public int? MappingOrder { get; }
+
+        /// <summary>Only included by ProjectTo when explicitly requested.</summary>
+        public bool ExplicitExpansion { get; }
 
         internal DestinationMember DestinationMember { get; }
         internal ValueSource? Source { get; }

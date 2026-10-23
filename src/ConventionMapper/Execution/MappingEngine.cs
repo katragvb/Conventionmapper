@@ -7,9 +7,17 @@ namespace ConventionMapper.Execution
 {
     internal sealed class MappingEngine
     {
-        public MappingEngine(MapperConfiguration configuration) { Configuration = configuration; }
+        private readonly MapCompiler _compiler;
+
+        public MappingEngine(MapperConfiguration configuration)
+        {
+            Configuration = configuration;
+            _compiler = new MapCompiler(this);
+        }
 
         public MapperConfiguration Configuration { get; }
+
+        internal MapCompiler Compiler => _compiler;
 
         public object? MapRoot(object? source, Type sourceType, Type destinationType, object? destination, ResolutionContext context, MappingOperationOptions? options)
         {
@@ -84,6 +92,28 @@ namespace ConventionMapper.Execution
                 }
             }
 
+            // Compiled fast path (falls back to the interpreter below when the map is not compilable).
+            if (!isRoot && !context.IgnoreNullSourceValues && Configuration.UseCompiledMappings)
+            {
+                var plan = typeMap.GetCompiledPlan(_compiler);
+                if (plan != null)
+                {
+                    try
+                    {
+                        return plan.Map(source, destination, context);
+                    }
+                    catch (MappingException ex)
+                    {
+                        ex.CapturePath(context);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        throw MappingException.ForTypes(typeMap.SourceType, typeMap.DestinationType, ex).CapturePath(context);
+                    }
+                }
+            }
+
             var track = typeMap.PreserveReferences && !source.GetType().IsValueType;
             if (track && context.TryGetCached(source, typeMap.DestinationType, out var cached)) return cached;
 
@@ -122,7 +152,7 @@ namespace ConventionMapper.Execution
             }
         }
 
-        private object CreateDestination(TypeMap typeMap, object source, ResolutionContext context)
+        public object CreateDestination(TypeMap typeMap, object source, ResolutionContext context)
         {
             if (typeMap.CustomCtor != null) return typeMap.CustomCtor(source, context);
 
@@ -170,7 +200,7 @@ namespace ConventionMapper.Execution
 
         private bool SkipNull(TypeMap typeMap, ResolutionContext context) => typeMap.IgnoreNullSourceValues || context.IgnoreNullSourceValues;
 
-        private void MapProperty(TypeMap typeMap, PropertyMap map, object source, object destination, ResolutionContext context)
+        public void MapProperty(TypeMap typeMap, PropertyMap map, object source, object destination, ResolutionContext context)
         {
             context.PushPath(map.DestinationName);
             try
@@ -243,6 +273,75 @@ namespace ConventionMapper.Execution
             catch (Exception ex)
             {
                 throw MappingException.ForMember(typeMap, name, ex).CapturePath(context);
+            }
+            finally
+            {
+                context.PopPath();
+            }
+        }
+
+        // ------------------------------------------------------------------ entry points used by compiled maps
+
+        /// <summary>Maps one member value through the engine (nested maps, collections, conversions) with path tracking.</summary>
+        public object? MapNested(object? value, Type declaredType, Type destinationType, object? existing, ResolutionContext context, ProfileMap profile, string memberName)
+        {
+            context.PushPath(memberName);
+            try
+            {
+                return Map(value, value?.GetType() ?? declaredType, destinationType, existing, context, profile);
+            }
+            catch (MappingException ex)
+            {
+                ex.CapturePath(context);
+                throw;
+            }
+            finally
+            {
+                context.PopPath();
+            }
+        }
+
+        /// <summary>Calls a nested map's compiled delegate directly (used by compiled parents), tracking the member path.</summary>
+        public static object? InvokeNested(CompiledMap map, object? value, object? existing, ResolutionContext? context, string memberName)
+        {
+            if (value == null) return null;
+            if (context == null) return map(value, existing, null);
+            context.PushPath(memberName);
+            try
+            {
+                return map(value, existing, context);
+            }
+            catch (MappingException ex)
+            {
+                ex.CapturePath(context);
+                throw;
+            }
+            finally
+            {
+                context.PopPath();
+            }
+        }
+
+        public void RunPaths(TypeMap typeMap, object source, object destination, ResolutionContext context)
+        {
+            foreach (var path in typeMap.PathMaps) MapPath(typeMap, path, source, destination, context);
+        }
+
+        /// <summary>Turns an exception thrown inside a compiled map into the same MappingException the interpreter produces.</summary>
+        public static Exception MemberFailed(TypeMap typeMap, string[] names, int step, Exception exception, ResolutionContext? context)
+        {
+            if (step < 0 || step >= names.Length)
+            {
+                var whole = exception as MappingException ?? MappingException.ForTypes(typeMap.SourceType, typeMap.DestinationType, exception);
+                return context != null ? whole.CapturePath(context) : whole;
+            }
+            var member = names[step];
+            if (context == null) return exception as MappingException ?? MappingException.ForMember(typeMap, member, exception);
+            context.PushPath(member);
+            try
+            {
+                var mapped = exception as MappingException ?? MappingException.ForMember(typeMap, member, exception);
+                return mapped.CapturePath(context);
             }
             finally
             {

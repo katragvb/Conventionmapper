@@ -100,6 +100,7 @@ namespace ConventionMapper
             if (map.HasNullSubstitute) notes.Add("null substitute: " + (map.NullSubstitute ?? "null"));
             if (map.UseDestinationValue) notes.Add("uses destination value");
             if (map.MappingOrder.HasValue) notes.Add("order " + map.MappingOrder.Value);
+            if (map.ExplicitExpansion) notes.Add("ProjectTo: only when expanded");
             if (map.Transformers.Length > 0) notes.Add(map.Transformers.Length + " value transform(s)");
             return notes.Count == 0 ? string.Empty : "   [" + string.Join("; ", notes) + "]";
         }
