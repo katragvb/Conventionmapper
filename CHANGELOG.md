@@ -1,6 +1,17 @@
 # Changelog
 
-## 1.3.0 (unreleased)
+## 1.4.0 (unreleased)
+
+### Performance
+- `Map<TSource, TDestination>` calls a strongly typed `Func<TSource, TDestination>` from the static cache: no casts, no boxing and no try/catch inside the compiled code. Flat 8-property map: 16.0 ns → 13.9 ns (Mapster 16.0 ns).
+
+### Source generator
+- Static methods declared in a `[GeneratedMapper]` class are used as conversions wherever their types occur, and take priority over the built-in conversions: `private static string Format(Money m) => ...` formats every `Money` → `string` member.
+
+### Native AOT
+- New sample `samples/ConventionMapper.Sample.Aot`, published with `PublishAot=true` and warnings as errors, and run in CI on every push.
+
+## 1.3.0 (2026-10-23)
 
 ### Attributes
 - `[MappedFrom(typeof(Source))]` declares an attribute map. The previous attribute still works but is obsolete and hidden from IntelliSense.

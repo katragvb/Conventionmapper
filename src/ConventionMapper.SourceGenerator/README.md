@@ -3,7 +3,7 @@
 Build-time object mapping. You declare partial mapping methods; the generator writes the implementation into your project when it compiles.
 
 * **No reflection at runtime.** The output is plain C# assignments, loops and constructor calls.
-* **Native AOT and trimming safe.** The package has no runtime dependency, not even on `ConventionMapper`.
+* **Native AOT and trimming safe.** The package has no runtime dependency, not even on `ConventionMapper`. The repository's [AOT sample](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.Aot) is published with `PublishAot=true` and warnings as errors, and run, on every CI build.
 * **As fast as hand-written code.** There is no configuration lookup, no boxing, no delegate per member.
 * **Debuggable.** Step into the generated method like any other code (in Visual Studio: *Go To Definition* on the method, or look under *Dependencies → Analyzers → ConventionMapper.SourceGenerator*).
 * **Mistakes are build errors.** An unmapped destination member fails the build (`CM0001`) instead of showing up at runtime.
@@ -56,6 +56,23 @@ Mappers can be static or instance classes, nested inside other partial types, an
 | Null collections | become empty collections |
 
 Values of the same type are assigned as they are (reference types are not cloned).
+
+## Your own conversions
+
+Any static method in the mapper class that takes one value and returns another is used wherever those two types meet, and it takes priority over the built-in conversions:
+
+```csharp
+[GeneratedMapper]
+public static partial class OrderMapper
+{
+    public static partial OrderDto ToDto(Order order);
+
+    // Used for every Money -> string member, in every method of this mapper.
+    private static string Format(Money money) => money.Amount.ToString("0.00") + " " + money.Currency;
+}
+```
+
+Partial mapping methods are reused the same way for nested objects, so declaring `LineDto ToDto(Line line)` makes every `Line` → `LineDto` member (and list element) call it.
 
 ## Configuring members
 

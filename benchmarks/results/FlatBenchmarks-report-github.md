@@ -10,9 +10,9 @@ AMD EPYC 9V45, 1 CPU, 4 logical and 2 physical cores
 ```
 | Method                          | Mean       | Error     | StdDev    | Ratio | RatioSD | Gen0   | Allocated | Alloc Ratio |
 |-------------------------------- |-----------:|----------:|----------:|------:|--------:|-------:|----------:|------------:|
-| Manual                          |   7.754 ns | 0.1977 ns | 0.3136 ns |  1.00 |    0.00 | 0.0048 |      80 B |        1.00 |
-| ConventionMapper                |  15.961 ns | 0.2906 ns | 0.2427 ns |  1.99 |    0.05 | 0.0048 |      80 B |        1.00 |
-| ConventionMapper_Generated      |   7.962 ns | 0.2005 ns | 0.3765 ns |  1.03 |    0.07 | 0.0048 |      80 B |        1.00 |
-| ConventionMapper_ObjectOverload |  18.094 ns | 0.2640 ns | 0.2205 ns |  2.25 |    0.07 | 0.0048 |      80 B |        1.00 |
-| ConventionMapper_Interpreted    | 306.277 ns | 6.1425 ns | 7.7683 ns | 39.04 |    2.07 | 0.0200 |     336 B |        4.20 |
-| Mapster                         |  15.561 ns | 0.1572 ns | 0.1313 ns |  1.94 |    0.06 | 0.0048 |      80 B |        1.00 |
+| Manual                          |   7.821 ns | 0.1612 ns | 0.1429 ns |  1.00 |    0.00 | 0.0048 |      80 B |        1.00 |
+| ConventionMapper                |  13.868 ns | 0.3024 ns | 0.3824 ns |  1.79 |    0.06 | 0.0048 |      80 B |        1.00 |
+| ConventionMapper_Generated      |   7.949 ns | 0.2008 ns | 0.2232 ns |  1.01 |    0.03 | 0.0048 |      80 B |        1.00 |
+| ConventionMapper_ObjectOverload |  16.953 ns | 0.3759 ns | 0.4329 ns |  2.16 |    0.08 | 0.0048 |      80 B |        1.00 |
+| ConventionMapper_Interpreted    | 313.629 ns | 3.2671 ns | 2.5508 ns | 39.98 |    0.62 | 0.0200 |     336 B |        4.20 |
+| Mapster                         |  15.959 ns | 0.3123 ns | 0.2608 ns |  2.04 |    0.05 | 0.0048 |      80 B |        1.00 |

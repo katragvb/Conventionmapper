@@ -28,7 +28,7 @@ dotnet add package ConventionMapper
 1. **One compiled delegate per map.** The first time a map is used, it is compiled into a strongly typed expression tree. `Person → PersonDto` becomes the equivalent of `new PersonDto { Id = src.Id, Name = src.Name, ... }`.
 2. **Direct assignments, no boxing.** Numbers, dates, enums, strings and flattened paths such as `Customer.Address.City` are copied directly, with null-safe navigation. Conditions, pre-conditions and null substitutes compile to plain `if` checks. Only members that genuinely need more (resolvers, custom conversions) call into the engine, member by member, so results are identical to the interpreter.
 3. **Nested maps and collections inlined.** On the fast path, child maps are expanded in place and collections are filled by typed loops (`for` over arrays and `List<T>`, the type's own struct enumerator otherwise), with no per-element delegate calls and no boxed enumerators. Existing destination objects and collections are reused exactly as by the interpreter.
-4. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object, and `Map<TSource, TDestination>(src)` / `Map<TDestination>(src)` find them through a static generic field instead of a dictionary lookup. Maps that do need a context are called from the same cache, skipping the engine's type-map lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
+4. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object. `Map<TSource, TDestination>(src)` calls a strongly typed `Func<TSource, TDestination>` held in a static generic field: no dictionary lookup, no casts, no boxing and no try/catch inside the compiled code. Maps that do need a context are called from the same cache, skipping the engine's type-map lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
 5. **Pooled context.** Maps that need a `ResolutionContext` (resolvers, conditions, per-call items) reuse one per thread instead of allocating one per call. Call `cfg.DisableContextPooling()` if a resolver keeps a reference to the context after `Map` returns.
 6. **Automatic fallback.** Maps that need reference tracking (cycles, `PreserveReferences`, `MaxDepth`), struct destinations and `Patch()` calls run on the interpreter, with the same behaviour.
 
@@ -55,12 +55,12 @@ Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 
 
 | Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 |
 | --- | ---: | ---: | ---: | ---: |
-| Flat: 8 properties | 7.8 ns | 16.0 ns | **8.0 ns** | 15.6 ns |
-| Nested: flattening + list of 5 | 73.6 ns¹ | 61.5 ns | **52.1 ns** | 67.6 ns |
+| Flat: 8 properties | 7.8 ns | 13.9 ns | **7.9 ns** | 16.0 ns |
+| Nested: flattening + list of 5 | 79.6 ns¹ | 61.9 ns | **52.7 ns** | 69.4 ns |
 
 ¹ The hand-written nested version uses `Select(...).ToList()`; the mappers use pre-sized lists and indexed loops.
 
-A map with a `Condition` (which needs a `ResolutionContext`) runs in 36.9 ns. Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
+A map with a `Condition` (which needs a `ResolutionContext`) runs in 36.1 ns. Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
 
 ### Tips for the fastest mapping
 
@@ -89,7 +89,7 @@ public static partial class OrderMapper
 OrderDto dto = order.ToDto();
 ```
 
-The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). See [docs/source-generator.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md).
+The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). Static methods in the mapper class, such as `private static string Format(Money m)`, are used for every member of those types. The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). The [Native AOT sample](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.Aot) is published with `PublishAot=true` and run on every CI build. See [docs/source-generator.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md).
 
 ## Analyzers
 
@@ -427,7 +427,7 @@ Expression mapping (translating expressions written against DTOs), `IDataReader`
 
 The runtime `ConventionMapper` package uses reflection and runtime code generation, so it is not compatible with trimming or Native AOT; for those apps use [`ConventionMapper.SourceGenerator`](#build-time-mapping-source-generator), which generates plain C# with no reflection. The configuration constructors and `AddConventionMapper` are marked `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`, so trimmed and AOT apps get a clear build warning instead of failing at runtime.
 
-## Sample app
+## Samples
 
 [`samples/ConventionMapper.Sample.WebApi`](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.WebApi) is an ASP.NET Core minimal API on EF Core (in-memory) that shows `ProjectTo` with a query parameter and explicit expansion, `mapper.Patch`, collection merging by key and `Explain()` in one small app:
 
@@ -435,13 +435,19 @@ The runtime `ConventionMapper` package uses reflection and runtime code generati
 dotnet run --project samples/ConventionMapper.Sample.WebApi
 ```
 
+[`samples/ConventionMapper.Sample.Aot`](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.Aot) is a Native AOT console app that uses only build-time mapping:
+
+```
+dotnet publish samples/ConventionMapper.Sample.Aot -c Release -r linux-x64 -o out && ./out/ConventionMapper.Sample.Aot
+```
+
 ## Building and publishing
 
 ```
-./build.sh 1.3.0      # or ./build.ps1 -Version 1.3.0
+./build.sh 1.4.0      # or ./build.ps1 -Version 1.4.0
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.3.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.3.0.nupkg` to `./artifacts`. Pushing a `v1.3.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.1.4.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.4.0.nupkg` to `./artifacts`. Pushing a `v1.4.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
 
 ## Changelog
 
