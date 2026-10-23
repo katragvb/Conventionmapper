@@ -15,6 +15,8 @@ dotnet add package ConventionMapper
 ## Why ConventionMapper
 
 * **Convention first.** Matching names, flattening, `Get` methods, constructors and records map with no configuration. Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration cover everything else.
+* **Data-leak guard.** Mark fields such as password hashes or tokens `[Sensitive]`, and any mapping that would copy them into a DTO fails at build time and at startup. See [Data-leak guard](#data-leak-guard-sensitive).
+* **Know what changed.** `mapper.MapWithChanges(dto, entity)` updates an object and returns every changed value with its old and new value, ready for audit logs. See [Change tracking](#change-tracking-mapwithchanges).
 * **Build-time code generation.** The `ConventionMapper.SourceGenerator` package writes plain C# mapping code into your project at compile time: no reflection, Native AOT and trimming safe, as fast as hand-written code, and unmapped members are build errors. See [Build-time mapping](#build-time-mapping-source-generator).
 * **Mistakes caught while typing.** A bundled analyzer flags unmapped members in `CreateMap<,>()` in the IDE, with one-click fixes. See [Analyzers](#analyzers).
 * **Compiled for speed.** Every map is compiled into a single typed delegate with direct, non-boxing assignments, and simple maps skip per-call overhead entirely through a static generic cache. See [Performance](#performance).
@@ -97,8 +99,65 @@ The `ConventionMapper` package ships a Roslyn analyzer with code fixes:
 
 * **CM1001:** `CreateMap<TSource, TDestination>();` has a destination member with no matching source member. Shown in the IDE while typing instead of when `AssertConfigurationIsValid()` runs. The fix adds `.ForMember(d => d.X, o => o.Ignore())`.
 * **CM1002:** `mapper.Map<TDestination>(source)` where the source type is known. The fix rewrites it to the faster `Map<TSource, TDestination>(source)`.
+* **CM1003 (error):** `CreateMap<,>()` would copy a `[Sensitive]` member into a member that isn't. The fix ignores the member.
 
 Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/analyzers.md).
+
+## Data-leak guard ([Sensitive])
+
+Mark members that must never reach an API response, a log or a client:
+
+```csharp
+public class User
+{
+    public string Email { get; set; }
+    [Sensitive] public string PasswordHash { get; set; }
+    [Sensitive] public string ApiToken { get; set; }
+}
+
+public class UserDto
+{
+    public string Email { get; set; }
+    public string PasswordHash { get; set; }   // matches by name...
+}
+
+cfg.CreateMap<User, UserDto>();
+// ...so the configuration fails:
+// User -> UserDto: 'PasswordHash' would receive the [Sensitive] member 'PasswordHash'.
+```
+
+The guard covers every way a value is copied as is: matching names, flattening (`Profile.ApiKey` → `ProfileApiKey`), `MapFrom(s => s.PasswordHash)`, string paths, constructor parameters and `ForPath`. Values computed from a sensitive member, such as `MapFrom(s => s.PasswordHash != null)`, are allowed.
+
+It is checked in three places:
+
+* **While typing:** analyzer **CM1003** marks the `CreateMap<,>()` call as an error, with a fix that ignores the member.
+* **At build time:** the source generator reports **CM0009** and does not generate the copy.
+* **At startup:** `new MapperConfiguration(...)` throws `MapperConfigurationException`, for maps the analyzer cannot see.
+
+To allow a copy on purpose (for example into a cache entry that is protected too), mark the destination member `[Sensitive]` as well. Sensitive data can only flow into sensitive members.
+
+## Change tracking (MapWithChanges)
+
+Update an existing object and get back exactly what changed:
+
+```csharp
+MappingChanges changes = mapper.MapWithChanges(dto, entity);
+
+if (changes.HasChanges)
+{
+    auditLog.Write(changes.ToString());
+    // Email: "a@x.com" -> "b@x.com"; Address.City: "London" -> "Paris"; Lines[1].Quantity: 1 -> 5; Lines.Count: 2 -> 3
+    await db.SaveChangesAsync();
+}
+
+foreach (var change in changes)
+    Console.WriteLine($"{change.Path}: {change.OldValue} -> {change.NewValue}");
+```
+
+* Paths cover nested objects (`Address.City`), collection elements (`Lines[1].Quantity`) and sizes (`Lines.Count`). Collections of simple values are compared as a whole (`Codes: [1, 2] -> [1, 2, 3]`).
+* `changes.Find("Email")` returns one change, and `changes.Changed("Address")` checks a member and everything below it.
+* Members marked `[Sensitive]` are reported as changed, but their values are never exposed: `ApiToken: (sensitive value changed)`.
+* Per-call options work as usual, so `mapper.MapWithChanges(patch, entity, opt => opt.IgnoreNullSourceValues())` gives a PATCH that also reports what it changed.
 
 ## Built-in features
 
@@ -106,6 +165,8 @@ These ship in the core package, with no add-on packages or hand-written workarou
 
 | Feature | How |
 | --- | --- |
+| Data-leak guard | `[Sensitive]` members can't be copied into unprotected destinations |
+| Change tracking | `mapper.MapWithChanges(source, destination)` returns old and new values |
 | Build-time generated mappers (no reflection, Native AOT) | `ConventionMapper.SourceGenerator` package |
 | Unmapped members reported while typing | Bundled analyzer (CM1001) with a code fix |
 | Update collections by key (EF Core) | `EqualityComparison(...)` |
@@ -444,10 +505,10 @@ dotnet publish samples/ConventionMapper.Sample.Aot -c Release -r linux-x64 -o ou
 ## Building and publishing
 
 ```
-./build.sh 1.4.0      # or ./build.ps1 -Version 1.4.0
+./build.sh 1.5.0      # or ./build.ps1 -Version 1.5.0
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.4.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.4.0.nupkg` to `./artifacts`. Pushing a `v1.4.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.1.5.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.5.0.nupkg` to `./artifacts`. Pushing a `v1.5.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
 
 ## Changelog
 

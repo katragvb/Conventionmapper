@@ -1,6 +1,16 @@
 # Changelog
 
-## 1.4.0 (unreleased)
+## 1.5.0 (unreleased)
+
+### Data-leak guard
+- `[Sensitive]` marks members (password hashes, tokens, personal data) that must not be copied into a destination member that is not `[Sensitive]` too.
+- Enforced while typing (analyzer CM1003, with a fix that ignores the member), at build time in generated mappers (CM0009) and at startup (`MapperConfigurationException`).
+- Covers matching names, flattening, `MapFrom` member paths, string paths, constructor parameters and `ForPath`; derived values are allowed.
+
+### Change tracking
+- `mapper.MapWithChanges(source, destination)` maps into an existing object and returns every changed value with its path, old value and new value (nested members, collection elements and counts). `[Sensitive]` values are redacted. An overload takes per-call options, e.g. `IgnoreNullSourceValues()` for PATCH.
+
+## 1.4.0 (2026-10-23)
 
 ### Performance
 - `Map<TSource, TDestination>` calls a strongly typed `Func<TSource, TDestination>` from the static cache: no casts, no boxing and no try/catch inside the compiled code. Flat 8-property map: 16.0 ns → 13.9 ns (Mapster 16.0 ns).

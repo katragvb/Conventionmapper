@@ -74,6 +74,10 @@ public static partial class OrderMapper
 
 Partial mapping methods are reused the same way for nested objects, so declaring `LineDto ToDto(Line line)` makes every `Line` → `LineDto` member (and list element) call it.
 
+## Sensitive members
+
+Mark members such as password hashes or tokens `[Sensitive]`. Copying one into a destination member that is not also `[Sensitive]` is build error CM0009, so it can't reach a DTO by accident. Projects that use only the generator get the attribute automatically. With the runtime `ConventionMapper` package installed too, its attribute is used.
+
 ## Configuring members
 
 ```csharp
@@ -93,6 +97,7 @@ public static partial OrderDto ToDto(Order order);
 | CM0005 | Error | The mapper class (and every class containing it) must be `partial`. |
 | CM0006 | Error | The method signature is not a supported mapping method. |
 | CM0007 | Warning | A source enum value has no destination value with the same name; mapping it throws. |
+| CM0009 | Error | A `[Sensitive]` source member would be copied into a destination member that is not `[Sensitive]`. Add `[MapIgnore]`, or mark the destination `[Sensitive]`. |
 | CM0008 | Warning | `[MapMember]` / `[MapIgnore]` names a member that does not exist. |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.
