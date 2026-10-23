@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.2.0 (unreleased)
+## 1.3.0 (unreleased)
+
+### Attributes
+- `[MappedFrom(typeof(Source))]` declares an attribute map. The previous attribute still works but is obsolete and hidden from IntelliSense.
+
+### Documentation and packaging
+- README links are absolute, so they work on nuget.org.
+- README, package tags and benchmarks describe ConventionMapper on its own; the benchmarks compare with hand-written code and Mapster.
+
+## 1.2.0 (2026-10-23)
 
 ### New package: ConventionMapper.SourceGenerator
 - Build-time mapping: declare partial methods in a `[GeneratedMapper]` class and the generator writes plain C# mapping code at compile time. No reflection, no runtime dependency, Native AOT and trimming safe, debuggable.
@@ -18,11 +27,8 @@
 - `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call (280 B → 80 B). `cfg.DisableContextPooling()` turns it off.
 - The root type name used in error messages is only computed when an error occurs.
 
-### Attributes
-- `[MappedFrom(typeof(Source))]` declares an attribute map. The 1.x attribute still works but is obsolete and hidden from IntelliSense.
-
 ### Packaging
-- Package validation against the latest published version (1.1.0) for release builds.
+- Package validation against the latest published version for release builds.
 - README renders correctly on nuget.org (no HTML in the heading).
 - Benchmark workflow that commits BenchmarkDotNet results to the repository.
 

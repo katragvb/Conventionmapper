@@ -438,10 +438,10 @@ dotnet run --project samples/ConventionMapper.Sample.WebApi
 ## Building and publishing
 
 ```
-./build.sh 1.2.0      # or ./build.ps1 -Version 1.2.0
+./build.sh 1.3.0      # or ./build.ps1 -Version 1.3.0
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.2.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.2.0.nupkg` to `./artifacts`. Pushing a `v1.2.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.1.3.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.3.0.nupkg` to `./artifacts`. Pushing a `v1.3.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
 
 ## Changelog
 
