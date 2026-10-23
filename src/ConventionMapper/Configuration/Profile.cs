@@ -102,6 +102,11 @@ namespace ConventionMapper
 
         public bool UseCompiledMappings { get; set; } = true;
 
+        /// <summary>
+        /// Reuse <see cref="ResolutionContext"/> instances across Map calls on the same thread (default true).
+        /// Set false (or call <c>cfg.DisableContextPooling()</c>) if a resolver or converter keeps a reference
+        /// to the context after the Map call returns.
+        /// </summary>
         public bool UseContextPooling { get; set; } = true;
 
         public bool ValidateNullability { get; set; }

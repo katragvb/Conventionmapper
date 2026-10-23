@@ -51,12 +51,6 @@ namespace ConventionMapper
         /// <summary>Compile maps into delegates on first use (default true). Set false to always use the interpreter.</summary>
         bool UseCompiledMappings { get; set; }
 
-        /// <summary>
-        /// Reuse <see cref="ResolutionContext"/> instances across Map calls on the same thread (default true).
-        /// Set false if a resolver or converter keeps a reference to the context after the Map call returns.
-        /// </summary>
-        bool UseContextPooling { get; set; }
-
         /// <summary>AssertConfigurationIsValid also reports members whose source may be null while the destination is not nullable.</summary>
         bool ValidateNullability { get; set; }
     }

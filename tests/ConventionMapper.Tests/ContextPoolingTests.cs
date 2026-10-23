@@ -16,7 +16,7 @@ namespace ConventionMapper.Tests
         private static IMapper CreateMapper(bool pooling) =>
             new MapperConfiguration(cfg =>
             {
-                cfg.UseContextPooling = pooling;
+                if (!pooling) cfg.DisableContextPooling();
                 cfg.CreateMap<PoolSource, PoolDest>()
                    .ForMember(d => d.Tag, o => o.MapFrom((s, d, m, ctx) => ctx.Items.TryGetValue("Tag", out var tag) ? (string)tag : null));
             }).CreateMapper();

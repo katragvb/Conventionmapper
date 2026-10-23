@@ -13,10 +13,10 @@
 - CM1002: suggests `Map<TSource, TDestination>` when the source type is known, with a code fix.
 
 ### Performance
-- `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call. `cfg.UseContextPooling = false` turns it off.
+- `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call. `cfg.DisableContextPooling()` turns it off.
 
 ### Packaging
-- Package validation against the 1.0.0 baseline.
+- Package validation against the latest published version (1.1.0) for release builds.
 - README renders correctly on nuget.org (no HTML in the heading).
 - Benchmark workflow that commits BenchmarkDotNet results to the repository.
 
