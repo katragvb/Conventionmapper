@@ -33,6 +33,10 @@ namespace ConventionMapper.SourceGenerator
         private readonly StringBuilder _helpers = new StringBuilder();
         private readonly Dictionary<string, string> _helperNames = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, IMethodSymbol> _userMaps = new Dictionary<string, IMethodSymbol>(StringComparer.Ordinal);
+
+        /// <summary>Ordinary (non-partial) static conversion methods; the only user methods used inside projections.</summary>
+        private readonly Dictionary<string, IMethodSymbol> _conversionMethods = new Dictionary<string, IMethodSymbol>(StringComparer.Ordinal);
+        private readonly HashSet<string> _reportedEnumPairs = new HashSet<string>(StringComparer.Ordinal);
         private int _counter;
         private int _memberIndent;
         private Location _location = Location.None;
@@ -136,6 +140,7 @@ namespace ConventionMapper.SourceGenerator
                 method.Parameters[0].RefKind != RefKind.None || method.ReturnsByRef || method.IsImplicitlyDeclared) return;
             var key = PairKey(method.Parameters[0].Type, method.ReturnType);
             if (overwrite || !_userMaps.ContainsKey(key)) _userMaps[key] = method;
+            if (overwrite) _conversionMethods[key] = method;
         }
 
         private bool IsPartialDefinition(IMethodSymbol method)
@@ -183,6 +188,13 @@ namespace ConventionMapper.SourceGenerator
             _location = syntax.Identifier.GetLocation();
             _current = method;
             w.Open(Signature(method, syntax));
+
+            if (!method.IsGenericMethod && TryGetProjection(method, out var projectedSource, out var projectedDestination, out var isQueryable))
+            {
+                EmitProjection(w, method, projectedSource, projectedDestination, isQueryable);
+                w.Close();
+                return;
+            }
 
             var isCreate = method.Parameters.Length == 1 && !method.ReturnsVoid;
             var isUpdate = method.Parameters.Length == 2 && method.ReturnsVoid;
@@ -775,6 +787,276 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             _helpers.Append(w.ToString());
             return name;
+        }
+
+        // ================================================================== projections (IQueryable / expression trees)
+
+        /// <summary>
+        /// IQueryable&lt;TDest&gt; M(IQueryable&lt;TSource&gt;) or Expression&lt;Func&lt;TSource, TDest&gt;&gt; M().
+        /// </summary>
+        private static bool TryGetProjection(IMethodSymbol method, out ITypeSymbol source, out ITypeSymbol destination, out bool isQueryable)
+        {
+            source = destination = null!;
+            isQueryable = false;
+            if (method.ReturnsVoid || !(method.ReturnType is INamedTypeSymbol returnType) || !returnType.IsGenericType) return false;
+            var definition = returnType.OriginalDefinition.ToDisplayString();
+
+            if (definition == "System.Linq.IQueryable<T>" && method.Parameters.Length == 1 &&
+                method.Parameters[0].Type is INamedTypeSymbol parameter && parameter.IsGenericType &&
+                parameter.OriginalDefinition.ToDisplayString() == "System.Linq.IQueryable<T>")
+            {
+                source = parameter.TypeArguments[0];
+                destination = returnType.TypeArguments[0];
+                isQueryable = true;
+                return true;
+            }
+
+            if (definition == "System.Linq.Expressions.Expression<TDelegate>" && method.Parameters.Length == 0 &&
+                returnType.TypeArguments[0] is INamedTypeSymbol func && func.IsGenericType &&
+                func.OriginalDefinition.ToDisplayString() == "System.Func<T, TResult>")
+            {
+                source = func.TypeArguments[0];
+                destination = func.TypeArguments[1];
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Emits a static expression (x =&gt; new TDest { ... }) that LINQ providers such as EF Core translate to SQL:
+        /// only the needed columns are selected. Expression trees cannot contain ?., patterns, named arguments or
+        /// statements, so projections are generated separately: navigation is plain (the provider handles nulls),
+        /// nested objects are created inline with a null check, collections use Enumerable.Select/ToList.
+        /// </summary>
+        private void EmitProjection(CodeWriter w, IMethodSymbol method, ITypeSymbol source, ITypeSymbol destination, bool isQueryable)
+        {
+            var config = ReadConfig(method);
+            if (!IsObjectLike(source, true) || !IsConstructible(destination))
+            {
+                Report(Diagnostics.UnsupportedSignature, method.Name);
+                w.Line("throw new global::System.NotSupportedException(\"Unsupported projection.\");");
+                return;
+            }
+
+            var stack = new HashSet<string>(StringComparer.Ordinal) { PairKey(source, destination) };
+            var body = ProjectionObject(source, (INamedTypeSymbol)destination, "x", config, 0, stack);
+            CheckConfigUsage(config, method, destination);
+            if (body == null)
+            {
+                w.Line("throw new global::System.NotSupportedException(\"" + Short(destination) + " has no usable constructor.\");");
+                return;
+            }
+
+            var field = "__projection" + (++_counter).ToString(CultureInfo.InvariantCulture) + "_" + Identifier(source) + "_" + Identifier(destination);
+            var expressionType = "global::System.Linq.Expressions.Expression<global::System.Func<" + T(source) + ", " + T(destination) + ">>";
+            var helper = new CodeWriter(_memberIndent);
+            helper.Line();
+            helper.Line("private static readonly " + expressionType + " " + field + " =");
+            helper.Indent();
+            helper.Line("x => " + body + ";");
+            helper.Outdent();
+            _helpers.Append(helper.ToString());
+
+            w.Line(isQueryable
+                ? "return global::System.Linq.Queryable.Select(" + Escape(method.Parameters[0].Name) + ", " + field + ");"
+                : "return " + field + ";");
+        }
+
+        private string? ProjectionObject(ITypeSymbol source, INamedTypeSymbol destination, string src, MemberConfig config, int depth, HashSet<string> stack)
+        {
+            // Constructor: expression trees allow neither named nor omitted optional arguments, so every parameter is mapped in order.
+            IMethodSymbol? chosen = null;
+            var arguments = new List<string>();
+            var consumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ctor in destination.InstanceConstructors.Where(c => IsAccessible(c) && !IsCopyConstructor(c, destination)).OrderByDescending(c => c.Parameters.Length))
+            {
+                var args = new List<string>();
+                var ok = true;
+                foreach (var p in ctor.Parameters)
+                {
+                    var path = config.Ignored.Contains(p.Name) ? null
+                        : config.Explicit.TryGetValue(p.Name, out var explicitPath) ? _resolver.FindExplicitPath(source, explicitPath)
+                        : _resolver.FindPath(source, p.Name);
+                    if (path == null || (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
+                                         !destination.GetMembers().Any(m => string.Equals(m.Name, p.Name, StringComparison.OrdinalIgnoreCase) && MemberResolver.IsSensitive(m))))
+                    {
+                        ok = false;
+                        break;
+                    }
+                    var value = ProjectionValue(MemberResolver.TypeOf(path[path.Count - 1]), p.Type, ProjectionPath(src, path), depth, stack);
+                    if (value == null)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    args.Add(value);
+                }
+                if (!ok) continue;
+                chosen = ctor;
+                arguments = args;
+                foreach (var p in ctor.Parameters) consumed.Add(p.Name);
+                break;
+            }
+            if (chosen == null && !destination.IsValueType)
+            {
+                Report(Diagnostics.NoUsableConstructor, Short(destination), Short(source));
+                return null;
+            }
+
+            var assignments = new List<string>();
+            foreach (var member in GetWritableMembers(destination, false))
+            {
+                if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
+                var value = ProjectionMember(source, src, member, destination, config, depth, stack);
+                if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
+            }
+
+            var creation = "new " + T(destination) + "(" + string.Join(", ", arguments) + ")";
+            return assignments.Count == 0 ? creation : creation + " { " + string.Join(", ", assignments) + " }";
+        }
+
+        private string? ProjectionMember(ITypeSymbol source, string src, ISymbol destinationMember, ITypeSymbol owner, MemberConfig config, int depth, HashSet<string> stack)
+        {
+            var name = destinationMember.Name;
+            List<ISymbol>? path;
+            if (config.Explicit.TryGetValue(name, out var explicitPath))
+            {
+                path = _resolver.FindExplicitPath(source, explicitPath);
+                if (path == null)
+                {
+                    Report(Diagnostics.UnknownAttributeMember, explicitPath, "MapMember", Short(source));
+                    return null;
+                }
+            }
+            else
+            {
+                path = _resolver.FindPath(source, name);
+                if (path == null)
+                {
+                    Report(Diagnostics.UnmappedMember, name, Short(owner), Short(source));
+                    return null;
+                }
+            }
+
+            var sourceName = Short(source) + "." + string.Join(".", path.Select(m => m.Name));
+            if (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(destinationMember))
+            {
+                Report(Diagnostics.SensitiveLeak, sourceName, Short(owner) + "." + name, name);
+                return null;
+            }
+
+            var valueType = MemberResolver.TypeOf(path[path.Count - 1]);
+            var destinationType = MemberResolver.TypeOf(destinationMember);
+            var value = ProjectionValue(valueType, destinationType, ProjectionPath(src, path), depth, stack);
+            if (value == null) Report(Diagnostics.IncompatibleTypes, sourceName, Short(valueType), Short(owner) + "." + name, Short(destinationType), name);
+            return value;
+        }
+
+        /// <summary>x.Customer.Address.City: plain navigation; the LINQ provider handles nulls in SQL.</summary>
+        private static string ProjectionPath(string src, List<ISymbol> path)
+        {
+            var sb = new StringBuilder(src);
+            foreach (var member in path)
+            {
+                sb.Append('.').Append(Escape(member.Name));
+                if (member is IMethodSymbol) sb.Append("()");
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Expression-tree-safe conversion, or null when unsupported.</summary>
+        private string? ProjectionValue(ITypeSymbol s, ITypeSymbol d, string expr, int depth, HashSet<string> stack)
+        {
+            if (depth > 8) return null;
+            if (SymbolEqualityComparer.Default.Equals(s, d)) return expr;
+            if (_conversionMethods.TryGetValue(PairKey(s, d), out var method)) return Escape(method.Name) + "(" + expr + ")";
+
+            var conversion = _compilation.ClassifyConversion(s, d);
+            if (conversion.Exists && conversion.IsImplicit) return expr;
+
+            var sIsNullable = MemberResolver.IsNullableValueType(s, out var sUnderlying);
+            var dIsNullable = MemberResolver.IsNullableValueType(d, out var dUnderlying);
+
+            if (d.SpecialType == SpecialType.System_String)
+            {
+                if (!IsScalar(sUnderlying)) return null;
+                return sIsNullable ? "(" + expr + " == null ? null : " + expr + ".Value.ToString())" : expr + ".ToString()";
+            }
+            if (sIsNullable && dIsNullable)
+            {
+                var inner = ProjectionValue(sUnderlying, dUnderlying, expr + ".Value", depth + 1, stack);
+                return inner == null ? null : "(" + expr + " == null ? (" + T(d) + ")null : (" + T(d) + ")(" + inner + "))";
+            }
+            if (sIsNullable) return ProjectionValue(sUnderlying, d, "(" + expr + " ?? default(" + T(sUnderlying) + "))", depth + 1, stack);
+            if (dIsNullable)
+            {
+                var inner = ProjectionValue(s, dUnderlying, expr, depth + 1, stack);
+                return inner == null ? null : "(" + T(d) + ")(" + inner + ")";
+            }
+
+            if (s.TypeKind == TypeKind.Enum && d.TypeKind == TypeKind.Enum) return ProjectionEnum((INamedTypeSymbol)s, (INamedTypeSymbol)d, expr);
+            if ((s.TypeKind == TypeKind.Enum && IsIntegral(d)) || (IsIntegral(s) && d.TypeKind == TypeKind.Enum)) return "(" + T(d) + ")(" + expr + ")";
+            if (conversion.Exists && conversion.IsExplicit && conversion.IsNumeric) return "(" + T(d) + ")(" + expr + ")";
+
+            var kind = GetCollectionKind(d);
+            var sourceElement = ElementTypeOf(s);
+            if ((kind == CollectionKind.List || kind == CollectionKind.Array) && sourceElement != null)
+            {
+                var destinationElement = d is IArrayTypeSymbol array ? array.ElementType : ((INamedTypeSymbol)d).TypeArguments[0];
+                var parameter = "x" + (++_counter).ToString(CultureInfo.InvariantCulture);
+                var element = ProjectionValue(sourceElement, destinationElement, parameter, depth + 1, stack);
+                if (element == null) return null;
+                var items = element == parameter
+                    ? expr
+                    : "global::System.Linq.Enumerable.Select(" + expr + ", " + parameter + " => " + element + ")";
+                return (kind == CollectionKind.Array ? "global::System.Linq.Enumerable.ToArray(" : "global::System.Linq.Enumerable.ToList(") + items + ")";
+            }
+
+            if (IsObjectLike(s, true) && IsConstructible(d))
+            {
+                var key = PairKey(s, d);
+                if (stack.Contains(key))
+                {
+                    Report(Diagnostics.RecursiveProjection, Short(d));
+                    return d.IsValueType ? null : "(" + T(d) + ")null";
+                }
+                stack.Add(key);
+                var created = ProjectionObject(s, (INamedTypeSymbol)d, expr, MemberConfig.Empty, depth + 1, stack);
+                stack.Remove(key);
+                if (created == null) return null;
+                return s.IsReferenceType ? "(" + expr + " == null ? null : " + created + ")" : created;
+            }
+
+            if (conversion.Exists && conversion.IsExplicit && conversion.IsUserDefined) return "(" + T(d) + ")(" + expr + ")";
+            return null;
+        }
+
+        /// <summary>Enum by name as a conditional chain (translates to CASE WHEN in SQL).</summary>
+        private string ProjectionEnum(INamedTypeSymbol source, INamedTypeSymbol destination, string expr)
+        {
+            if (HasFlags(source) || HasFlags(destination)) return "(" + T(destination) + ")(" + T(source.EnumUnderlyingType!) + ")(" + expr + ")";
+            var targets = destination.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue).ToList();
+            var seen = new HashSet<object>();
+            var report = _reportedEnumPairs.Add(PairKey(source, destination));
+            var result = "default(" + T(destination) + ")";
+            var cases = new List<string>();
+            foreach (var field in source.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue))
+            {
+                if (field.ConstantValue == null || !seen.Add(field.ConstantValue)) continue;
+                var match = targets.FirstOrDefault(t => string.Equals(t.Name, field.Name, StringComparison.OrdinalIgnoreCase));
+                if (match == null)
+                {
+                    if (report) Report(Diagnostics.UnmappedEnumValue, source.Name, field.Name, destination.Name);
+                    continue;
+                }
+                cases.Add(T(source) + "." + Escape(field.Name) + "|" + T(destination) + "." + Escape(match.Name));
+            }
+            for (var i = cases.Count - 1; i >= 0; i--)
+            {
+                var parts = cases[i].Split('|');
+                result = "(" + expr + " == " + parts[0] + " ? " + parts[1] + " : " + result + ")";
+            }
+            return result;
         }
 
         // ================================================================== type classification

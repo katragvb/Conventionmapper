@@ -138,6 +138,39 @@ public class UserCache { public int Id { get; set; } [Sensitive] public string P
         }
 
         [Fact]
+        public void Projections_are_expression_tree_safe()
+        {
+            var result = Generate(Models + @"
+using System;
+using System.Linq;
+using System.Linq.Expressions;
+public class Dest { public int Id { get; set; } public string? AddressCity { get; set; } public int Score { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    public static partial IQueryable<Dest> Project(this IQueryable<Source> q);
+    public static partial Expression<Func<Source, Dest>> Projection();
+}");
+
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Empty(result.CompileErrors); // ?., patterns or named arguments in an expression tree would be compile errors
+            Assert.Contains("global::System.Linq.Queryable.Select(q, ", result.Source);
+            Assert.Contains("x.Address.City", result.Source);
+            Assert.Contains("x.Score ?? default(int)", result.Source);
+        }
+
+        [Fact]
+        public void Projection_reports_unmapped_members()
+        {
+            var result = Generate(Models + @"
+using System.Linq;
+public class Dest { public int Id { get; set; } public string Missing { get; set; } = """"; }
+[GeneratedMapper] public static partial class M { public static partial IQueryable<Dest> Project(IQueryable<Source> q); }");
+
+            Assert.Contains(result.Generator, d => d.Id == "CM0001" && d.GetMessage().Contains("Missing"));
+            Assert.Empty(result.CompileErrors);
+        }
+
+        [Fact]
         public void Mapper_must_be_partial()
         {
             var result = Generate(Models + @"

@@ -47,6 +47,11 @@ namespace ConventionMapper.SourceGenerator
             "'{0}' is marked [Sensitive] and would be copied to '{1}', which is not. Skip it with [MapIgnore(\"{2}\")], or mark '{1}' [Sensitive] if it is protected too.",
             Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor RecursiveProjection = new DiagnosticDescriptor(
+            "CM0010", "Recursive type in a projection",
+            "'{0}' refers back to itself; a projection cannot expand it, so the member is left null. Skip it with [MapIgnore] or map it in a separate query.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",
