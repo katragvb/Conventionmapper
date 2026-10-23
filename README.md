@@ -2,7 +2,7 @@
 
 [![NuGet](https://img.shields.io/nuget/v/ConventionMapper.svg)](https://www.nuget.org/packages/ConventionMapper)
 [![Downloads](https://img.shields.io/nuget/dt/ConventionMapper.svg)](https://www.nuget.org/packages/ConventionMapper)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/katragvb/Conventionmapper/blob/main/LICENSE)
 
 A fast, convention-based object-object mapper for .NET. It removes the boring code that copies one object into another (entities → DTOs, view models, API contracts), with an API that will feel familiar if you have used AutoMapper.
 
@@ -14,7 +14,7 @@ dotnet add package ConventionMapper
 
 ## Why ConventionMapper
 
-* **Familiar API.** Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration work the way AutoMapper users expect, so migrating is mostly a rename. See the [migration guide](docs/migrating-from-automapper.md).
+* **Familiar API.** Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration work the way AutoMapper users expect, so migrating is mostly a rename. See the [migration guide](https://github.com/katragvb/Conventionmapper/blob/main/docs/migrating-from-automapper.md).
 * **Build-time code generation.** The `ConventionMapper.SourceGenerator` package writes plain C# mapping code into your project at compile time: no reflection, Native AOT and trimming safe, as fast as hand-written code, and unmapped members are build errors. See [Build-time mapping](#build-time-mapping-source-generator).
 * **Mistakes caught while typing.** A bundled analyzer flags unmapped members in `CreateMap<,>()` in the IDE, with one-click fixes. See [Analyzers](#analyzers).
 * **Compiled for speed.** Every map is compiled into a single typed delegate with direct, non-boxing assignments, and simple maps skip per-call overhead entirely through a static generic cache. See [Performance](#performance).
@@ -51,7 +51,7 @@ The repository includes a [BenchmarkDotNet](https://benchmarkdotnet.org/) projec
 dotnet run -c Release --project benchmarks/ConventionMapper.Benchmarks -- --filter *
 ```
 
-Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 8.0, AMD EPYC 9V45 GitHub Actions runner; raw reports in [`benchmarks/results`](benchmarks/results)). Lower is better.
+Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 8.0, AMD EPYC 9V45 GitHub Actions runner; raw reports in [`benchmarks/results`](https://github.com/katragvb/Conventionmapper/tree/main/benchmarks/results)). Lower is better.
 
 | Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 | AutoMapper 13 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -90,7 +90,7 @@ public static partial class OrderMapper
 OrderDto dto = order.ToDto();
 ```
 
-The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). See [docs/source-generator.md](docs/source-generator.md).
+The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). See [docs/source-generator.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md).
 
 ## Analyzers
 
@@ -99,7 +99,7 @@ The `ConventionMapper` package ships a Roslyn analyzer with code fixes:
 * **CM1001:** `CreateMap<TSource, TDestination>();` has a destination member with no matching source member. Shown in the IDE while typing instead of when `AssertConfigurationIsValid()` runs. The fix adds `.ForMember(d => d.X, o => o.Ignore())`.
 * **CM1002:** `mapper.Map<TDestination>(source)` where the source type is known. The fix rewrites it to the faster `Map<TSource, TDestination>(source)`.
 
-Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](docs/analyzers.md).
+Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/analyzers.md).
 
 ## Exclusive built-in features
 
@@ -423,7 +423,7 @@ string[] unmapped = map.GetUnmappedPropertyNames();
 
 ## Differences from AutoMapper
 
-ConventionMapper is an independent implementation, not a fork. Collection merging and strict enum mapping (separate AutoMapper packages) are built in. Not included: the ExpressionMapping, EF6 and Data extensions, logging integration and license keys, and runtime-generated proxies for interface destination types. The [migration guide](docs/migrating-from-automapper.md) lists the renames and the few unsupported APIs.
+ConventionMapper is an independent implementation, not a fork. Collection merging and strict enum mapping (separate AutoMapper packages) are built in. Not included: the ExpressionMapping, EF6 and Data extensions, logging integration and license keys, and runtime-generated proxies for interface destination types. The [migration guide](https://github.com/katragvb/Conventionmapper/blob/main/docs/migrating-from-automapper.md) lists the renames and the few unsupported APIs.
 
 ## Trimming and Native AOT
 
@@ -431,7 +431,7 @@ The runtime `ConventionMapper` package uses reflection and runtime code generati
 
 ## Sample app
 
-[`samples/ConventionMapper.Sample.WebApi`](samples/ConventionMapper.Sample.WebApi) is an ASP.NET Core minimal API on EF Core (in-memory) that shows `ProjectTo` with a query parameter and explicit expansion, `mapper.Patch`, collection merging by key and `Explain()` in one small app:
+[`samples/ConventionMapper.Sample.WebApi`](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.WebApi) is an ASP.NET Core minimal API on EF Core (in-memory) that shows `ProjectTo` with a query parameter and explicit expansion, `mapper.Patch`, collection merging by key and `Explain()` in one small app:
 
 ```
 dotnet run --project samples/ConventionMapper.Sample.WebApi
@@ -447,7 +447,7 @@ This restores, builds, runs the tests and writes `ConventionMapper.1.2.0.nupkg` 
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md).
+See [CHANGELOG.md](https://github.com/katragvb/Conventionmapper/blob/main/CHANGELOG.md).
 
 ## License
 
