@@ -5,6 +5,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Normally set by the ConventionMapper package's build targets (project references don't import them). -->
+    <DefineConstants>$(DefineConstants);CONVENTIONMAPPER_RUNTIME</DefineConstants>
     <Optimize>true</Optimize>
   </PropertyGroup>
 

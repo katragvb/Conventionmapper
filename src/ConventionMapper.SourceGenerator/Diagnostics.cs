@@ -42,6 +42,11 @@ namespace ConventionMapper.SourceGenerator
             "Enum value '{0}.{1}' has no member with the same name in '{2}'; mapping it throws ArgumentOutOfRangeException",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor SensitiveLeak = new DiagnosticDescriptor(
+            "CM0009", "Sensitive member would be copied",
+            "'{0}' is marked [Sensitive] and would be copied to '{1}', which is not. Skip it with [MapIgnore(\"{2}\")], or mark '{1}' [Sensitive] if it is protected too.",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

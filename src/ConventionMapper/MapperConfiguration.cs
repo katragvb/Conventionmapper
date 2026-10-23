@@ -61,6 +61,8 @@ namespace ConventionMapper
             foreach (var profile in configurationExpression.Profiles) _profiles.Add(new ProfileMap(profile, RootProfile));
             Engine = new MappingEngine(this);
             Build();
+            var leaks = SensitiveGuard.FindLeaks(_typeMaps.Values);
+            if (leaks.Count > 0) throw new MapperConfigurationException(leaks);
         }
 
         internal ProfileMap RootProfile { get; }
@@ -229,6 +231,13 @@ namespace ConventionMapper
                     var closed = new TypeMap(open.Config.CloseGeneric(sourceType, destinationType), open.Profile);
                     _typeMaps[pair] = closed;
                     closed.Seal();
+                    var leaks = new List<string>();
+                    SensitiveGuard.AddLeaks(closed, leaks);
+                    if (leaks.Count > 0)
+                    {
+                        _typeMaps.TryRemove(pair, out _);
+                        throw new MapperConfigurationException(leaks);
+                    }
                     if (!closed.PreserveReferences && closed.TypeConverter == null && IsReachable(closed, closed, new HashSet<TypeMap>()))
                         closed.PreserveReferences = true;
                     return closed;

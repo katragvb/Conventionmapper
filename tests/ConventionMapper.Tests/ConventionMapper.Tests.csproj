@@ -7,6 +7,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>annotations</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Normally set by the ConventionMapper package's build targets (project references don't import them). -->
+    <DefineConstants>$(DefineConstants);CONVENTIONMAPPER_RUNTIME</DefineConstants>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 

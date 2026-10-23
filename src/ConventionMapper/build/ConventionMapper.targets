@@ -1,0 +1,6 @@
+<Project>
+  <!-- Tells ConventionMapper.SourceGenerator that this package provides [Sensitive], so it does not add its own copy. -->
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);CONVENTIONMAPPER_RUNTIME</DefineConstants>
+  </PropertyGroup>
+</Project>

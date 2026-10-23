@@ -21,6 +21,7 @@ namespace ConventionMapper.Analyzers
     {
         public const string UnmappedMemberId = "CM1001";
         public const string PreferTypedMapId = "CM1002";
+        public const string SensitiveLeakId = "CM1003";
         public const string MemberProperty = "Member";
         public const string SourceTypeProperty = "SourceType";
 
@@ -40,6 +41,14 @@ namespace ConventionMapper.Analyzers
             "The source type is known: Map<{0}, {1}>(...) uses the static fast path without a runtime type lookup",
             Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink);
 
+        internal static readonly DiagnosticDescriptor SensitiveLeak = new DiagnosticDescriptor(
+            SensitiveLeakId, "Sensitive member would be copied",
+            "'{0}' is marked [Sensitive] and would be copied to '{1}.{2}', which is not. Ignore it with ForMember(d => d.{2}, o => o.Ignore()), or mark '{2}' [Sensitive] if it is protected too.",
+            Category, DiagnosticSeverity.Error, true,
+            "A mapping must not copy a [Sensitive] member (password hash, token, personal data) into a destination member that is not also marked [Sensitive]. " +
+            "The same check fails the configuration at runtime.",
+            HelpLink);
+
         /// <summary>Configuration calls that change how members match; profiles using them are not checked by CM1001.</summary>
         private static readonly string[] ConventionChangingCalls =
         {
@@ -48,7 +57,7 @@ namespace ConventionMapper.Analyzers
             "ShouldMapMethod", "ForAllMaps", "ForAllPropertyMaps", "IncludeMembers"
         };
 
-        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(UnmappedMember, PreferTypedMap);
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(UnmappedMember, PreferTypedMap, SensitiveLeak);
 
         public override void Initialize(AnalysisContext context)
         {
@@ -83,7 +92,15 @@ namespace ConventionMapper.Analyzers
             foreach (var member in PublicWritableMembers(destination))
             {
                 if (HasConventionMapperAttribute(member, "IgnoreMapAttribute") || HasConventionMapperAttribute(member, "SourceMemberAttribute")) continue;
-                if (resolver.FindPath(source, member.Name) != null) continue;
+                var path = resolver.FindPath(source, member.Name);
+                if (path != null)
+                {
+                    if (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(member))
+                        context.ReportDiagnostic(Diagnostic.Create(SensitiveLeak, invocation.Syntax.GetLocation(),
+                            ImmutableDictionary<string, string?>.Empty.Add(MemberProperty, member.Name),
+                            source.Name + "." + string.Join(".", path.Select(m => m.Name)), destination.Name, member.Name));
+                    continue;
+                }
 
                 var properties = ImmutableDictionary<string, string?>.Empty.Add(MemberProperty, member.Name);
                 context.ReportDiagnostic(Diagnostic.Create(UnmappedMember, invocation.Syntax.GetLocation(), properties,

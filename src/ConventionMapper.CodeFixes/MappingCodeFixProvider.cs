@@ -21,8 +21,9 @@ namespace ConventionMapper.CodeFixes
     {
         private const string UnmappedMemberId = "CM1001";
         private const string PreferTypedMapId = "CM1002";
+        private const string SensitiveLeakId = "CM1003";
 
-        public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UnmappedMemberId, PreferTypedMapId);
+        public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UnmappedMemberId, PreferTypedMapId, SensitiveLeakId);
 
         public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -36,7 +37,17 @@ namespace ConventionMapper.CodeFixes
             foreach (var diagnostic in context.Diagnostics)
             {
                 var node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
-                if (diagnostic.Id == UnmappedMemberId && diagnostic.Properties.TryGetValue("Member", out var member) && member != null)
+                if (diagnostic.Id == SensitiveLeakId && diagnostic.Properties.TryGetValue("Member", out var leaked) && leaked != null)
+                {
+                    var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+                    if (invocation == null) continue;
+                    context.RegisterCodeFix(
+                        CodeAction.Create("Ignore '" + leaked + "'",
+                            ct => IgnoreMembersAsync(context.Document, invocation, new[] { leaked }, ct),
+                            SensitiveLeakId + ":" + leaked),
+                        diagnostic);
+                }
+                else if (diagnostic.Id == UnmappedMemberId && diagnostic.Properties.TryGetValue("Member", out var member) && member != null)
                 {
                     var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
                     if (invocation == null) continue;

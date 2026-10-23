@@ -31,6 +31,15 @@ namespace ConventionMapper.Roslyn
             }
         }
 
+        /// <summary>True when the member carries ConventionMapper's [Sensitive] attribute (from either package), here or on an overridden base member.</summary>
+        public static bool IsSensitive(ISymbol member)
+        {
+            for (var current = member; current != null; current = (current as IPropertySymbol)?.OverriddenProperty)
+                foreach (var attribute in current.GetAttributes())
+                    if (attribute.AttributeClass?.ToDisplayString() == "ConventionMapper.SensitiveAttribute") return true;
+            return false;
+        }
+
         /// <summary>Name used for convention matching: GetTotal() matches "Total".</summary>
         public static string ConventionName(ISymbol member) =>
             member is IMethodSymbol ? member.Name.Substring(3) : member.Name;

@@ -116,6 +116,28 @@ public enum B { One, Two }
         }
 
         [Fact]
+        public void Copying_a_sensitive_member_is_a_build_error_unless_the_destination_is_sensitive()
+        {
+            var result = Generate(@"
+using ConventionMapper;
+public class User { public int Id { get; set; } [Sensitive] public string PasswordHash { get; set; } = """"; }
+public class UserDto { public int Id { get; set; } public string PasswordHash { get; set; } = """"; }
+public class UserCache { public int Id { get; set; } [Sensitive] public string PasswordHash { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    public static partial UserDto ToDto(User u);
+    public static partial UserCache ToCache(User u);
+}");
+
+            var leak = Assert.Single(result.Generator, d => d.Id == "CM0009");
+            Assert.Equal(DiagnosticSeverity.Error, leak.Severity);
+            Assert.Contains("UserDto.PasswordHash", leak.GetMessage());
+            Assert.Empty(result.CompileErrors); // the generator-only project gets its own [Sensitive]
+            // Copied once: into the protected UserCache, never into UserDto.
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(result.Source, @"PasswordHash = u\.PasswordHash").Cast<System.Text.RegularExpressions.Match>());
+        }
+
+        [Fact]
         public void Mapper_must_be_partial()
         {
             var result = Generate(Models + @"
@@ -199,6 +221,20 @@ public class P : Profile { public P() { CreateMap<Order, OrderDto>(); } }");
             var diagnostic = Assert.Single(diagnostics);
             Assert.Equal("CM1001", diagnostic.Id);
             Assert.Contains("Note", diagnostic.GetMessage());
+        }
+
+        [Fact]
+        public async Task CreateMap_copying_a_sensitive_member_is_reported()
+        {
+            var diagnostics = await Analyze(@"
+using ConventionMapper;
+public class User { public int Id { get; set; } [Sensitive] public string PasswordHash { get; set; } = """"; }
+public class UserDto { public int Id { get; set; } public string PasswordHash { get; set; } = """"; }
+public class P : Profile { public P() { CreateMap<User, UserDto>(); } }");
+
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Equal("CM1003", diagnostic.Id);
+            Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         }
 
         [Fact]

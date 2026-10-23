@@ -84,6 +84,17 @@ namespace ConventionMapper
 
         public string Destination { get; }
     }
+#if !CONVENTIONMAPPER_RUNTIME
+    /// <summary>
+    /// Marks a member that must never be copied into a destination member that is not also [Sensitive]
+    /// (password hashes, tokens, personal data). A mapping that would do so is build error CM0009.
+    /// When the ConventionMapper runtime package is referenced, its public attribute is used instead.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Property | global::System.AttributeTargets.Field | global::System.AttributeTargets.Parameter, Inherited = true)]
+    internal sealed class SensitiveAttribute : global::System.Attribute
+    {
+    }
+#endif
 }
 ";
     }

@@ -307,7 +307,7 @@ namespace ConventionMapper.SourceGenerator
             foreach (var member in GetWritableMembers(destination, false))
             {
                 if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
-                var value = MapMember(source, src, member.Name, MemberResolver.TypeOf(member), destination, config);
+                var value = MapMember(source, src, member, destination, config);
                 if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
             }
 
@@ -350,7 +350,7 @@ namespace ConventionMapper.SourceGenerator
             foreach (var member in GetWritableMembers(named, true))
             {
                 if (config.Ignored.Contains(member.Name)) continue;
-                var value = MapMember(source, src, member.Name, MemberResolver.TypeOf(member), named, config);
+                var value = MapMember(source, src, member, named, config);
                 if (value != null) w.Line(dest + "." + Escape(member.Name) + " = " + value + ";");
             }
         }
@@ -381,6 +381,12 @@ namespace ConventionMapper.SourceGenerator
                     var path = config.Explicit.TryGetValue(p.Name, out var explicitPath)
                         ? _resolver.FindExplicitPath(source, explicitPath)
                         : _resolver.FindPath(source, p.Name);
+                    if (path != null && path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
+                        !destination.GetMembers().Any(m => string.Equals(m.Name, p.Name, StringComparison.OrdinalIgnoreCase) && MemberResolver.IsSensitive(m)))
+                    {
+                        Report(Diagnostics.SensitiveLeak, Short(source) + "." + string.Join(".", path.Select(m => m.Name)), Short(destination) + "(" + p.Name + ")", p.Name);
+                        path = null;
+                    }
                     if (path != null)
                     {
                         var access = BuildPath(src, source, path);
@@ -439,8 +445,10 @@ namespace ConventionMapper.SourceGenerator
         }
 
         /// <summary>The value expression for one destination member, or null (a diagnostic has been reported).</summary>
-        private string? MapMember(ITypeSymbol source, string src, string destinationName, ITypeSymbol destinationType, ITypeSymbol owner, MemberConfig config)
+        private string? MapMember(ITypeSymbol source, string src, ISymbol destinationMember, ITypeSymbol owner, MemberConfig config)
         {
+            var destinationName = destinationMember.Name;
+            var destinationType = MemberResolver.TypeOf(destinationMember);
             List<ISymbol>? path;
             if (config.Explicit.TryGetValue(destinationName, out var explicitPath))
             {
@@ -461,9 +469,15 @@ namespace ConventionMapper.SourceGenerator
                 }
             }
 
+            var sourceName = Short(source) + "." + string.Join(".", path.Select(m => m.Name));
+            if (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(destinationMember))
+            {
+                Report(Diagnostics.SensitiveLeak, sourceName, Short(owner) + "." + destinationName, destinationName);
+                return null;
+            }
+
             var access = BuildPath(src, source, path);
             var value = Convert(access.Type, destinationType, access.Expression, 0);
-            var sourceName = Short(source) + "." + string.Join(".", path.Select(m => m.Name));
             if (value == null)
             {
                 Report(Diagnostics.IncompatibleTypes, sourceName, Short(access.Type), Short(owner) + "." + destinationName, Short(destinationType), destinationName);
