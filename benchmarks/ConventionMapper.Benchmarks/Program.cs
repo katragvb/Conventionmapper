@@ -131,7 +131,7 @@ public class ContextBenchmarks
         var pooled = new CM.MapperConfiguration(cfg => Configure(cfg));
         pooled.CompileMappings();
         _pooled = pooled.CreateMapper();
-        var unpooled = new CM.MapperConfiguration(cfg => { cfg.DisableContextPooling(); Configure(cfg); });
+        var unpooled = new CM.MapperConfiguration(cfg => { CM.ContextPoolingExtensions.DisableContextPooling(cfg); Configure(cfg); });
         unpooled.CompileMappings();
         _unpooled = unpooled.CreateMapper();
         _am = new AM.MapperConfiguration(cfg =>
