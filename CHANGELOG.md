@@ -13,7 +13,10 @@
 - CM1002: suggests `Map<TSource, TDestination>` when the source type is known, with a code fix.
 
 ### Performance
-- `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call. `cfg.DisableContextPooling()` turns it off.
+- Nested maps and collections are compiled inline into the fast-path delegate: typed `for` loops over arrays and `List<T>`, struct enumerators for other sources, child maps expanded in place. Order with flattening and a 5-line list: 224 ns → 109 ns (Mapster 123 ns, AutoMapper 203 ns).
+- `Condition`, `PreCondition` and `NullSubstitute` on directly assignable members are compiled instead of interpreted, and maps that need a context are called straight from the static cache without the engine's type-map lookup. A map with a condition: 192 ns → 69 ns (AutoMapper 86 ns).
+- `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call (280 B → 80 B). `cfg.DisableContextPooling()` turns it off.
+- The root type name used in error messages is only computed when an error occurs.
 
 ### Packaging
 - Package validation against the latest published version (1.1.0) for release builds.

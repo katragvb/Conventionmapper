@@ -26,10 +26,11 @@ dotnet add package ConventionMapper
 ### How it works
 
 1. **One compiled delegate per map.** The first time a map is used, it is compiled into a strongly typed expression tree, the same technique Mapster and AutoMapper use. `Person → PersonDto` becomes the equivalent of `new PersonDto { Id = src.Id, Name = src.Name, ... }`.
-2. **Direct assignments, no boxing.** Numbers, dates, enums, strings and flattened paths such as `Customer.Address.City` are copied directly, with null-safe navigation. Nested objects and collections (`List<T>`, `T[]`, `IEnumerable<T>`, `IList<T>`, `IReadOnlyList<T>`, ...) call the child map's compiled delegate directly, element by element. Only members that genuinely need more (resolvers, conditions, custom conversions) call into the engine, member by member, so results are identical to the interpreter.
-3. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object, and `Map<TSource, TDestination>(src)` / `Map<TDestination>(src)` find them through a static generic field instead of a dictionary lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
-4. **Pooled context.** Maps that need a `ResolutionContext` (resolvers, conditions, per-call items) reuse one per thread instead of allocating one per call. Call `cfg.DisableContextPooling()` if a resolver keeps a reference to the context after `Map` returns.
-5. **Automatic fallback.** Maps that need reference tracking (cycles, `PreserveReferences`, `MaxDepth`), struct destinations and `Patch()` calls run on the interpreter, with the same behaviour.
+2. **Direct assignments, no boxing.** Numbers, dates, enums, strings and flattened paths such as `Customer.Address.City` are copied directly, with null-safe navigation. Conditions, pre-conditions and null substitutes compile to plain `if` checks. Only members that genuinely need more (resolvers, custom conversions) call into the engine, member by member, so results are identical to the interpreter.
+3. **Nested maps and collections inlined.** On the fast path, child maps are expanded in place and collections are filled by typed loops (`for` over arrays and `List<T>`, the type's own struct enumerator otherwise), with no per-element delegate calls and no boxed enumerators. Existing destination objects and collections are reused exactly as by the interpreter.
+4. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object, and `Map<TSource, TDestination>(src)` / `Map<TDestination>(src)` find them through a static generic field instead of a dictionary lookup. Maps that do need a context are called from the same cache, skipping the engine's type-map lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
+5. **Pooled context.** Maps that need a `ResolutionContext` (resolvers, conditions, per-call items) reuse one per thread instead of allocating one per call. Call `cfg.DisableContextPooling()` if a resolver keeps a reference to the context after `Map` returns.
+6. **Automatic fallback.** Maps that need reference tracking (cycles, `PreserveReferences`, `MaxDepth`), struct destinations and `Patch()` calls run on the interpreter, with the same behaviour.
 
 ```csharp
 var config = new MapperConfiguration(cfg => cfg.AddMaps(typeof(Program).Assembly));
@@ -40,27 +41,27 @@ cfg.UseCompiledMappings = false;   // optional: always use the interpreter
 
 ### Benchmarks
 
-The repository includes a [BenchmarkDotNet](https://benchmarkdotnet.org/) project that compares ConventionMapper with hand-written code, Mapster 7.4 and AutoMapper 13.0.1 (the last MIT-licensed AutoMapper release) in two scenarios:
+The repository includes a [BenchmarkDotNet](https://benchmarkdotnet.org/) project that compares ConventionMapper (runtime and source-generated) with hand-written code, Mapster 7.4 and AutoMapper 13.0.1 (the last MIT-licensed AutoMapper release):
 
 * **Flat:** `Person → PersonDto`, 8 properties (int, string, DateTime, bool, decimal).
 * **Nested:** `Order → OrderDto` with flattening (`CustomerAddressCity`) and a list of 5 lines.
+* **Context:** `Person → PersonDto` with a `Condition` that reads the `ResolutionContext`.
 
 ```
 dotnet run -c Release --project benchmarks/ConventionMapper.Benchmarks -- --filter *
 ```
 
-<!--
-Paste your BenchmarkDotNet results here, e.g.:
+Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 8.0, AMD EPYC 9V45 GitHub Actions runner; raw reports in [`benchmarks/results`](benchmarks/results)). Lower is better.
 
-| Method             | Mean | Ratio | Allocated |
-|------------------- |-----:|------:|----------:|
-| Manual             |      |  1.00 |           |
-| ConventionMapper   |      |       |           |
-| Mapster            |      |       |           |
-| AutoMapper         |      |       |           |
+| Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 | AutoMapper 13 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Flat: 8 properties | 7.6 ns | 16.0 ns | **8.5 ns** | 15.5 ns | 42.2 ns |
+| Nested: flattening + list of 5 | 80.4 ns¹ | 63.6 ns | **57.8 ns** | 72.4 ns | 123.9 ns |
+| With a `Condition` (needs a context) | | **33.8 ns** | | | 43.2 ns |
 
-Machine: CPU, OS, .NET version
--->
+¹ The hand-written nested version uses `Select(...).ToList()`; the mappers use pre-sized lists and indexed loops.
+
+Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B vs 464 B for AutoMapper). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
 
 ### Tips for the fastest mapping
 
