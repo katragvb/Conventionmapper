@@ -28,6 +28,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ConventionMapper\ConventionMapper.csproj" />
+    <!-- Runs the source generator on this project (end-to-end tests) and references it for the generator driver tests. -->
+    <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator\ConventionMapper.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+    <ProjectReference Include="..\..\src\ConventionMapper.Analyzers\ConventionMapper.Analyzers.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
   </ItemGroup>
 
 </Project>

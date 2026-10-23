@@ -14,7 +14,7 @@
     <!-- ===== NuGet package metadata ===== -->
     <!-- IMPORTANT: check https://www.nuget.org/packages/<PackageId> is free before publishing, and change it if needed. -->
     <PackageId>ConventionMapper</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
@@ -38,6 +38,14 @@
     <!-- Fails the pack when a new version breaks the public API of the baseline release. -->
     <PackageValidationBaselineVersion>1.0.0</PackageValidationBaselineVersion>
   </PropertyGroup>
+
+  <!-- Build-time analyzer + code fixes for the runtime API, shipped in this package under analyzers/dotnet/cs. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ConventionMapper.Analyzers\ConventionMapper.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="..\ConventionMapper.CodeFixes\ConventionMapper.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\ConventionMapper.Analyzers\bin\$(Configuration)\netstandard2.0\ConventionMapper.Analyzers.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="..\ConventionMapper.CodeFixes\bin\$(Configuration)\netstandard2.0\ConventionMapper.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
