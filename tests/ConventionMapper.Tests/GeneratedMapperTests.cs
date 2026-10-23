@@ -24,7 +24,7 @@ namespace ConventionMapper.Tests.Generated
         public DateTime Created { get; set; }
         public Dictionary<string, int> Tags { get; set; } = new Dictionary<string, int>();
         public HashSet<string> Labels { get; set; } = new HashSet<string>();
-        public decimal GetTotal() => Lines.Sum(l => l.Price * l.Quantity);
+        public decimal GetTotal() => Lines?.Sum(l => l.Price * l.Quantity) ?? 0m;
     }
 
     public class GenLineDto { public string Sku { get; set; } = ""; public int Quantity { get; set; } public decimal Price { get; set; } }
