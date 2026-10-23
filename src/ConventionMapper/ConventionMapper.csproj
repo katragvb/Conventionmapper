@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Same target set as AutoMapper: .NET Standard 2.0 (covers .NET Framework 4.6.1+), plus modern .NET -->
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>annotations</Nullable>
+    <RootNamespace>ConventionMapper</RootNamespace>
+    <AssemblyName>ConventionMapper</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Deterministic>true</Deterministic>
+
+    <!-- ===== NuGet package metadata ===== -->
+    <!-- IMPORTANT: check https://www.nuget.org/packages/<PackageId> is free before publishing, and change it if needed. -->
+    <PackageId>ConventionMapper</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Katragadda</Authors>
+    <Company>Katragadda</Company>
+    <Product>ConventionMapper</Product>
+    <Description>A convention-based object-object mapper for .NET. Flattening, unflattening (ReverseMap), profiles, value resolvers, type converters, value converters, conditions, before/after map actions, inheritance (Include/IncludeBase), constructor mapping, collections, dictionaries, enums, IQueryable projection (ProjectTo), configuration validation and Microsoft.Extensions.DependencyInjection integration. Also built in: collection merging by key (EqualityComparison), PATCH-style mapping that ignores null source values, strict enum mapping with validation, immutable collections, full member paths in error messages and Explain() for inspecting maps.</Description>
+    <PackageTags>mapper;object-mapper;mapping;dto;convention;flattening;projection;automapper-alternative</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/katragvb/Conventionmapper</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/katragvb/Conventionmapper</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="ConventionMapper.Tests" />
+  </ItemGroup>
+
+</Project>
