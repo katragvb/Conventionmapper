@@ -35,8 +35,8 @@
 
     <!-- Checks the package for API consistency across its target frameworks on every pack. -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <!-- After 1.1.0 is published, uncomment to fail the build when a later version breaks 1.1.0's public API. -->
-    <!-- <PackageValidationBaselineVersion>1.1.0</PackageValidationBaselineVersion> -->
+    <!-- Fails the pack when a new version breaks the public API of the baseline release. -->
+    <PackageValidationBaselineVersion>1.0.0</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <ItemGroup>
