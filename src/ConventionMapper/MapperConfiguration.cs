@@ -302,7 +302,7 @@ namespace ConventionMapper
                 typeMap.DerivedMaps.Count == 0 && typeMap.TypeConverter == null)
             {
                 var plan = typeMap.GetCompiledPlan(Engine.Compiler);
-                if (plan != null && plan.ContextFree) map = plan.Map;
+                if (plan != null && plan.ContextFree) map = plan.FastMap ?? plan.Map;
             }
             return new FastMapEntry(this, sourceType, map);
         }

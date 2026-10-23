@@ -20,6 +20,12 @@ namespace ConventionMapper.Execution
 
         public CompiledMap Map { get; }
 
+        /// <summary>
+        /// Fully inlined variant for the context-free fast path (nested maps and collection loops expanded in place),
+        /// or null. Errors are re-run on <see cref="Map"/> with a context, so messages keep their member paths.
+        /// </summary>
+        public CompiledMap? FastMap { get; internal set; }
+
         /// <summary>True when the delegate never touches the ResolutionContext, so it can run without one (fast path).</summary>
         public bool ContextFree { get; }
     }
@@ -32,7 +38,7 @@ namespace ConventionMapper.Execution
     /// the interpreter for that member only, so behaviour is identical to the interpreted engine.
     /// Maps that cannot be compiled (reference tracking, MaxDepth, struct destinations, ...) stay interpreted.
     /// </summary>
-    internal sealed class MapCompiler
+    internal sealed partial class MapCompiler
     {
         private static readonly MethodInfo MapNestedMethod = typeof(MappingEngine).GetMethod(nameof(MappingEngine.MapNested))!;
         private static readonly MethodInfo MapPropertyMethod = typeof(MappingEngine).GetMethod(nameof(MappingEngine.MapProperty))!;
@@ -54,7 +60,9 @@ namespace ConventionMapper.Execution
             if (!CanCompile(typeMap)) return null;
             try
             {
-                return new Builder(this, typeMap).Build();
+                var plan = new Builder(this, typeMap).Build();
+                if (plan.ContextFree) plan.FastMap = TryBuildInlined(typeMap);
+                return plan;
             }
             catch (Exception)
             {
@@ -80,13 +88,17 @@ namespace ConventionMapper.Execution
         /// The compiled plan of the map the engine would pick for (sourceType, destinationType) at runtime, when that
         /// choice cannot depend on the runtime type (no derived maps, no maps for subtypes of the source).
         /// </summary>
-        private CompiledPlan? FindInlinePlan(Type sourceType, Type destinationType)
+        private CompiledPlan? FindInlinePlan(Type sourceType, Type destinationType) => FindInlineTypeMap(sourceType, destinationType, out var plan) == null ? null : plan;
+
+        private TypeMap? FindInlineTypeMap(Type sourceType, Type destinationType, out CompiledPlan? plan)
         {
+            plan = null;
             var configuration = _engine.Configuration;
             var nested = configuration.ResolveTypeMap(sourceType, sourceType, destinationType);
             if (nested == null || nested.DestinationType != destinationType || nested.DerivedMaps.Count > 0 || nested.EqualityComparison != null) return null;
             if (configuration.HasPotentialSubtypeMaps(sourceType, destinationType)) return null;
-            return nested.GetCompiledPlan(this);
+            plan = nested.GetCompiledPlan(this);
+            return plan == null ? null : nested;
         }
 
         /// <summary>Func&lt;TSourceElement, ResolutionContext, TDestinationElement&gt; for inlined collections, or null.</summary>
@@ -280,7 +292,7 @@ namespace ConventionMapper.Execution
                 return Expression.Convert(Expression.Call(_engine, CreateDestinationMethod, Expression.Constant(_typeMap), _srcObj, _ctx), type);
             }
 
-            private static Expression DefaultArgument(CtorParamMap p) =>
+            internal static Expression DefaultArgument(CtorParamMap p) =>
                 p.DefaultValue == null
                     ? (Expression)Expression.Default(p.ParameterType)
                     : Expression.Convert(Expression.Constant(p.DefaultValue), p.ParameterType);
@@ -378,7 +390,7 @@ namespace ConventionMapper.Execution
                 return Expression.Assign(target, Expression.Call(CastMethod.MakeGenericMethod(destinationType), call));
             }
 
-            private static bool NeedsInterpreter(PropertyMap map) =>
+            internal static bool NeedsInterpreter(PropertyMap map) =>
                 map.PreCondition != null || map.Condition != null || map.HasNullSubstitute || map.UseDestinationValue ||
                 map.Transformers.Length > 0 || !CanAssign(map.DestinationMember);
 
@@ -393,7 +405,7 @@ namespace ConventionMapper.Execution
                 return member.Member is FieldInfo field && field.IsPublic && !field.IsInitOnly;
             }
 
-            private static Expression MemberAccess(Expression instance, MemberInfo member)
+            internal static Expression MemberAccess(Expression instance, MemberInfo member)
             {
                 var declaring = member.DeclaringType!;
                 if (!declaring.IsAssignableFrom(instance.Type)) instance = Expression.Convert(instance, declaring);
