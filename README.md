@@ -55,12 +55,12 @@ Results from the repository's benchmark workflow (BenchmarkDotNet 0.13.12, .NET 
 
 | Scenario | Hand-written | ConventionMapper | ConventionMapper (generated) | Mapster 7.4 |
 | --- | ---: | ---: | ---: | ---: |
-| Flat: 8 properties | 7.6 ns | 16.0 ns | **8.5 ns** | 15.5 ns |
-| Nested: flattening + list of 5 | 80.4 ns¹ | 63.6 ns | **57.8 ns** | 72.4 ns |
+| Flat: 8 properties | 7.8 ns | 16.0 ns | **8.0 ns** | 15.6 ns |
+| Nested: flattening + list of 5 | 73.6 ns¹ | 61.5 ns | **52.1 ns** | 67.6 ns |
 
 ¹ The hand-written nested version uses `Select(...).ToList()`; the mappers use pre-sized lists and indexed loops.
 
-A map with a `Condition` (which needs a `ResolutionContext`) runs in 33.8 ns. Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
+A map with a `Condition` (which needs a `ResolutionContext`) runs in 36.9 ns. Allocations equal hand-written code for flat maps (80 B) and Mapster for nested maps (384 B). Context pooling cuts the per-call allocation of context-dependent maps from 192 B to 80 B. Numbers vary by machine; run the suite yourself with the command above.
 
 ### Tips for the fastest mapping
 
