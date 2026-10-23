@@ -13,3 +13,6 @@ updates:
       - dependency-name: Microsoft.CodeAnalysis*
       - dependency-name: Microsoft.Extensions.*
       - dependency-name: Microsoft.EntityFrameworkCore*
+      # Analyzers and generators must use the compiler's own copies of these; newer versions stop them loading on older SDKs.
+      - dependency-name: System.Collections.Immutable
+      - dependency-name: System.Reflection.Metadata
