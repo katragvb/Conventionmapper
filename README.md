@@ -1,4 +1,4 @@
-# <img src="https://raw.githubusercontent.com/katragvb/Conventionmapper/main/icon.png" alt="" width="40" align="top"> ConventionMapper
+# ConventionMapper
 
 [![NuGet](https://img.shields.io/nuget/v/ConventionMapper.svg)](https://www.nuget.org/packages/ConventionMapper)
 [![Downloads](https://img.shields.io/nuget/dt/ConventionMapper.svg)](https://www.nuget.org/packages/ConventionMapper)

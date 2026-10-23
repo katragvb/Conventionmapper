@@ -114,6 +114,35 @@ public class NestedBenchmarks
     [Benchmark] public OrderDto AutoMapper() => _am.Map<Order, OrderDto>(_order);
 }
 
+/// <summary>A map with a condition needs a per-call ResolutionContext: this measures context pooling.</summary>
+[MemoryDiagnoser]
+public class ContextBenchmarks
+{
+    private readonly Person _person = new Person { Id = 1, FirstName = "Ada", LastName = "Lovelace", Email = "ada@example.com", Age = 36, BirthDate = new DateTime(1815, 12, 10), IsActive = true, Score = 99.5m };
+    private CM.IMapper _pooled, _unpooled;
+    private AM.IMapper _am;
+
+    private static void Configure(CM.IMapperConfigurationExpression cfg) =>
+        cfg.CreateMap<Person, PersonDto>().ForMember(d => d.Email, o => o.Condition((s, d, sm, dm, ctx) => ctx != null));
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var pooled = new CM.MapperConfiguration(cfg => Configure(cfg));
+        pooled.CompileMappings();
+        _pooled = pooled.CreateMapper();
+        var unpooled = new CM.MapperConfiguration(cfg => { cfg.UseContextPooling = false; Configure(cfg); });
+        unpooled.CompileMappings();
+        _unpooled = unpooled.CreateMapper();
+        _am = new AM.MapperConfiguration(cfg =>
+            cfg.CreateMap<Person, PersonDto>().ForMember(d => d.Email, o => o.Condition((s, d, m, dm, ctx) => true))).CreateMapper();
+    }
+
+    [Benchmark(Baseline = true)] public PersonDto ConventionMapper_Pooled() => _pooled.Map<Person, PersonDto>(_person);
+    [Benchmark] public PersonDto ConventionMapper_Unpooled() => _unpooled.Map<Person, PersonDto>(_person);
+    [Benchmark] public PersonDto AutoMapper() => _am.Map<Person, PersonDto>(_person);
+}
+
 public static class Program
 {
     public static void Main(string[] args) => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);

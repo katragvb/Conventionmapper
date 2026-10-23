@@ -1,0 +1,44 @@
+name: benchmarks
+
+# Push to a bench/* branch to run the BenchmarkDotNet suite. The GitHub-flavoured reports are
+# committed back to the same branch under benchmarks/results/.
+on:
+  push:
+    branches: [ 'bench/**' ]
+    paths-ignore: [ 'benchmarks/results/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run benchmarks
+        run: dotnet run -c Release --project benchmarks/ConventionMapper.Benchmarks -- --filter '*' --exporters github
+
+      - name: Commit results
+        run: |
+          mkdir -p benchmarks/results
+          cp BenchmarkDotNet.Artifacts/results/*-report-github.md benchmarks/results/
+          {
+            echo "# Environment"
+            echo
+            echo '```'
+            lscpu | grep -E 'Model name|^CPU\(s\)' || true
+            dotnet --version
+            echo '```'
+          } > benchmarks/results/environment.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benchmarks/results
+          git commit -m "Benchmark results for ${GITHUB_SHA::7}" || exit 0
+          git push

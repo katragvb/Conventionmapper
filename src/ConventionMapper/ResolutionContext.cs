@@ -22,8 +22,9 @@ namespace ConventionMapper
     internal sealed class MappingOperationOptions : IMappingOperationOptions
     {
         private Dictionary<string, object>? _items;
+        private Dictionary<string, object>? _ownItems; // created on demand by Items, kept across pooled calls
 
-        public IDictionary<string, object> Items => _items ??= new Dictionary<string, object>(StringComparer.Ordinal);
+        public IDictionary<string, object> Items => _items ??= (_ownItems ??= new Dictionary<string, object>(StringComparer.Ordinal));
         internal Dictionary<string, object>? RawItems => _items;
         internal Action<object, object>? BeforeMapAction { get; private set; }
         internal Action<object, object>? AfterMapAction { get; private set; }
@@ -40,7 +41,7 @@ namespace ConventionMapper
     public sealed class ResolutionContext
     {
         private readonly MappingEngine _engine;
-        private readonly Func<Type, object> _serviceCtor;
+        private Func<Type, object> _serviceCtor;
         private Dictionary<string, object>? _items;
         private Dictionary<ReferenceKey, object>? _cache;
         private Dictionary<TypeMap, int>? _depths;
@@ -51,6 +52,59 @@ namespace ConventionMapper
             _engine = engine;
             _serviceCtor = serviceCtor;
             _items = items;
+        }
+
+        // ---- pooling ----------------------------------------------------------------------------
+        // One idle context per thread. Rent takes it (so re-entrant Map calls on the same thread simply
+        // allocate a new one), Return resets it and puts it back. No locks, no shared state between threads.
+        [ThreadStatic] private static ResolutionContext? t_idle;
+
+        private const int MaxPooledEntries = 256;
+
+        internal static ResolutionContext Rent(MappingEngine engine, Func<Type, object> serviceCtor, Dictionary<string, object>? items)
+        {
+            var context = t_idle;
+            if (context != null && ReferenceEquals(context._engine, engine))
+            {
+                t_idle = null;
+                context._serviceCtor = serviceCtor;
+                context._items = items;
+                return context;
+            }
+            return new ResolutionContext(engine, serviceCtor, items);
+        }
+
+        internal static void Return(ResolutionContext context)
+        {
+            context.Reset();
+            t_idle = context;
+        }
+
+        private void Reset()
+        {
+            _items = null;
+            if (_ownItems != null)
+            {
+                if (_ownItems.Count > MaxPooledEntries) _ownItems = null;
+                else _ownItems.Clear();
+            }
+            _serviceCtor = null!;
+            if (_cache != null)
+            {
+                if (_cache.Count > MaxPooledEntries) _cache = null;
+                else _cache.Clear();
+            }
+            if (_depths != null)
+            {
+                if (_depths.Count > MaxPooledEntries) _depths = null;
+                else _depths.Clear();
+            }
+            _path?.Clear();
+            RootFramePending = false;
+            IgnoreNullSourceValues = false;
+            RootName = null;
+            RootBeforeMap = null;
+            RootAfterMap = null;
         }
 
         /// <summary>Items passed via <c>opt.Items</c>.</summary>

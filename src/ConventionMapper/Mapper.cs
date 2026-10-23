@@ -54,8 +54,20 @@ namespace ConventionMapper
                 options = new MappingOperationOptions();
                 opts(options);
             }
-            var context = new ResolutionContext(_configuration.Engine, options?.ServiceCtor ?? _serviceCtor, options?.RawItems);
-            return _configuration.Engine.MapRoot(source, sourceType, destinationType, destination, context, options);
+            var engine = _configuration.Engine;
+            var serviceCtor = options?.ServiceCtor ?? _serviceCtor;
+            if (!_configuration.UseContextPooling)
+                return engine.MapRoot(source, sourceType, destinationType, destination, new ResolutionContext(engine, serviceCtor, options?.RawItems), options);
+
+            var context = ResolutionContext.Rent(engine, serviceCtor, options?.RawItems);
+            try
+            {
+                return engine.MapRoot(source, sourceType, destinationType, destination, context, options);
+            }
+            finally
+            {
+                ResolutionContext.Return(context);
+            }
         }
 
         public TDestination Map<TDestination>(object? source)

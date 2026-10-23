@@ -54,6 +54,7 @@ namespace ConventionMapper
             if (configurationExpression == null) throw new ArgumentNullException(nameof(configurationExpression));
             ServiceCtor = configurationExpression.ServiceCtorValue;
             UseCompiledMappings = configurationExpression.UseCompiledMappings;
+            UseContextPooling = configurationExpression.UseContextPooling;
             ValidateNullability = configurationExpression.ValidateNullability;
             RootProfile = new ProfileMap(configurationExpression, null);
             _profiles.Add(RootProfile);
@@ -65,6 +66,7 @@ namespace ConventionMapper
         internal ProfileMap RootProfile { get; }
         internal Func<Type, object>? ServiceCtor { get; }
         internal bool UseCompiledMappings { get; }
+        internal bool UseContextPooling { get; }
         internal bool ValidateNullability { get; }
         internal MappingEngine Engine { get; }
 

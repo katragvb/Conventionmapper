@@ -102,6 +102,8 @@ namespace ConventionMapper
 
         public bool UseCompiledMappings { get; set; } = true;
 
+        public bool UseContextPooling { get; set; } = true;
+
         public bool ValidateNullability { get; set; }
 
         public MapperConfigurationExpression() : base("Default") { }
