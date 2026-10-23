@@ -1,6 +1,26 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.2.0 (unreleased)
+
+### New package: ConventionMapper.SourceGenerator
+- Build-time mapping: declare partial methods in a `[GeneratedMapper]` class and the generator writes plain C# mapping code at compile time. No reflection, no runtime dependency, Native AOT and trimming safe, debuggable.
+- Same conventions as the runtime mapper: names, flattening (null-safe), `Get` methods, constructors and records, `init` members, nested objects (reusing your own mapping methods), recursive types, arrays, lists, sets, dictionaries, enums (by name, `[Flags]` by value), nullable, numeric and string conversions, update-in-place methods, extension methods.
+- `[MapMember("Source.Path", "Destination")]` and `[MapIgnore("Destination")]`.
+- Diagnostics CM0001-CM0008; unmapped destination members are build errors.
+
+### Analyzers (in the ConventionMapper package)
+- CM1001: unmapped destination members in `CreateMap<TSource, TDestination>();`, reported in the IDE while typing, with a code fix that adds `ForMember(..., o => o.Ignore())`.
+- CM1002: suggests `Map<TSource, TDestination>` when the source type is known, with a code fix.
+
+### Performance
+- `ResolutionContext` is pooled per thread, so maps that need a context (resolvers, conditions, items) no longer allocate one per call. `cfg.UseContextPooling = false` turns it off.
+
+### Packaging
+- Package validation against the 1.0.0 baseline.
+- README renders correctly on nuget.org (no HTML in the heading).
+- Benchmark workflow that commits BenchmarkDotNet results to the repository.
+
+## 1.1.0 (2026-10-23)
 
 ### Performance
 - Maps are compiled into a single strongly typed delegate on first use. Simple members (numbers, dates, enums, strings, flattened paths) are assigned directly with no boxing.

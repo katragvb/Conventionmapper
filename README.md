@@ -15,6 +15,8 @@ dotnet add package ConventionMapper
 ## Why ConventionMapper
 
 * **Familiar API.** Profiles, `CreateMap`, `ForMember`, `ReverseMap`, `ProjectTo`, `AssertConfigurationIsValid` and DI registration work the way AutoMapper users expect, so migrating is mostly a rename. See the [migration guide](docs/migrating-from-automapper.md).
+* **Build-time code generation.** The `ConventionMapper.SourceGenerator` package writes plain C# mapping code into your project at compile time: no reflection, Native AOT and trimming safe, as fast as hand-written code, and unmapped members are build errors. See [Build-time mapping](#build-time-mapping-source-generator).
+* **Mistakes caught while typing.** A bundled analyzer flags unmapped members in `CreateMap<,>()` in the IDE, with one-click fixes. See [Analyzers](#analyzers).
 * **Compiled for speed.** Every map is compiled into a single typed delegate with direct, non-boxing assignments, and simple maps skip per-call overhead entirely through a static generic cache. See [Performance](#performance).
 * **More built in.** Collection merging by key, PATCH mapping, strict enum validation, immutable collections, full-path error messages and `Explain()` ship in the core package, with no add-ons. See [Exclusive built-in features](#exclusive-built-in-features).
 * **MIT licensed.** Free for every use, commercial included, with no license key.
@@ -26,7 +28,8 @@ dotnet add package ConventionMapper
 1. **One compiled delegate per map.** The first time a map is used, it is compiled into a strongly typed expression tree, the same technique Mapster and AutoMapper use. `Person → PersonDto` becomes the equivalent of `new PersonDto { Id = src.Id, Name = src.Name, ... }`.
 2. **Direct assignments, no boxing.** Numbers, dates, enums, strings and flattened paths such as `Customer.Address.City` are copied directly, with null-safe navigation. Nested objects and collections (`List<T>`, `T[]`, `IEnumerable<T>`, `IList<T>`, `IReadOnlyList<T>`, ...) call the child map's compiled delegate directly, element by element. Only members that genuinely need more (resolvers, conditions, custom conversions) call into the engine, member by member, so results are identical to the interpreter.
 3. **Zero-overhead fast path.** Maps made only of direct assignments and compiled child maps run without a per-call context object, and `Map<TSource, TDestination>(src)` / `Map<TDestination>(src)` find them through a static generic field instead of a dictionary lookup. If a fast-path call fails, it is re-run on the full path, so the exception still names the exact member.
-4. **Automatic fallback.** Maps that need reference tracking (cycles, `PreserveReferences`, `MaxDepth`), struct destinations and `Patch()` calls run on the interpreter, with the same behaviour.
+4. **Pooled context.** Maps that need a `ResolutionContext` (resolvers, conditions, per-call items) reuse one per thread instead of allocating one per call. Set `cfg.UseContextPooling = false` if a resolver keeps a reference to the context after `Map` returns.
+5. **Automatic fallback.** Maps that need reference tracking (cycles, `PreserveReferences`, `MaxDepth`), struct destinations and `Patch()` calls run on the interpreter, with the same behaviour.
 
 ```csharp
 var config = new MapperConfiguration(cfg => cfg.AddMaps(typeof(Program).Assembly));
@@ -66,12 +69,45 @@ Machine: CPU, OS, .NET version
 * Keep hot maps simple: convention matches and `MapFrom(s => s.A.B)` paths compile to direct assignments, while delegates, resolvers and conditions go through the engine.
 * For database queries, use `ProjectTo<TDto>()` so only the needed columns are selected.
 
+## Build-time mapping (source generator)
+
+```
+dotnet add package ConventionMapper.SourceGenerator
+```
+
+```csharp
+[GeneratedMapper]
+public static partial class OrderMapper
+{
+    [MapMember("Customer.Email", "ContactEmail")]
+    [MapIgnore("InternalNotes")]
+    public static partial OrderDto ToDto(this Order order);
+
+    public static partial void Update(OrderDto source, Order target);
+}
+
+OrderDto dto = order.ToDto();
+```
+
+The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). See [docs/source-generator.md](docs/source-generator.md).
+
+## Analyzers
+
+The `ConventionMapper` package ships a Roslyn analyzer with code fixes:
+
+* **CM1001:** `CreateMap<TSource, TDestination>();` has a destination member with no matching source member. Shown in the IDE while typing instead of when `AssertConfigurationIsValid()` runs. The fix adds `.ForMember(d => d.X, o => o.Ignore())`.
+* **CM1002:** `mapper.Map<TDestination>(source)` where the source type is known. The fix rewrites it to the faster `Map<TSource, TDestination>(source)`.
+
+Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](docs/analyzers.md).
+
 ## Exclusive built-in features
 
 Other mappers need extra packages or hand-written workarounds for these. ConventionMapper ships them in the core package.
 
 | Feature | ConventionMapper | AutoMapper |
 | --- | --- | --- |
+| Build-time generated mappers (no reflection, Native AOT) | `ConventionMapper.SourceGenerator` | Not available |
+| Unmapped members reported while typing | Bundled analyzer (CM1001) + code fix | Only at runtime (`AssertConfigurationIsValid`) |
 | License | MIT, free for any use | Commercial (dual) license since v15 |
 | Update collections by key (EF Core) | Built in: `EqualityComparison(...)` | Separate `AutoMapper.Collection` package |
 | Strict, validated enum mapping | Built in: `ConvertUsingEnumMapping(...)` | Separate `AutoMapper.Extensions.EnumMapping` package |
@@ -390,7 +426,7 @@ ConventionMapper is an independent implementation, not a fork. Collection mergin
 
 ## Trimming and Native AOT
 
-ConventionMapper uses reflection and runtime code generation, so it is not compatible with trimming or Native AOT. The configuration constructors and `AddConventionMapper` are marked `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`, so trimmed and AOT apps get a clear build warning instead of failing at runtime.
+The runtime `ConventionMapper` package uses reflection and runtime code generation, so it is not compatible with trimming or Native AOT; for those apps use [`ConventionMapper.SourceGenerator`](#build-time-mapping-source-generator), which generates plain C# with no reflection. The configuration constructors and `AddConventionMapper` are marked `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`, so trimmed and AOT apps get a clear build warning instead of failing at runtime.
 
 ## Sample app
 
@@ -403,10 +439,10 @@ dotnet run --project samples/ConventionMapper.Sample.WebApi
 ## Building and publishing
 
 ```
-./build.sh 1.1.0      # or ./build.ps1 -Version 1.1.0
+./build.sh 1.2.0      # or ./build.ps1 -Version 1.2.0
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.1.0.nupkg` and `.snupkg` to `./artifacts`. To publish, upload the `.nupkg` on nuget.org, or push a `v1.1.0` tag with the `NUGET_API_KEY` secret set (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.1.2.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.2.0.nupkg` to `./artifacts`. Pushing a `v1.2.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
 
 ## Changelog
 
