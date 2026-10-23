@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using ConventionMapper.Execution;
+using ConventionMapper.Internal;
 
 namespace ConventionMapper
 {
@@ -102,7 +103,7 @@ namespace ConventionMapper
             _path?.Clear();
             RootFramePending = false;
             IgnoreNullSourceValues = false;
-            RootName = null;
+            RootType = null;
             RootBeforeMap = null;
             RootAfterMap = null;
         }
@@ -123,7 +124,8 @@ namespace ConventionMapper
 
         internal bool RootFramePending { get; set; }
         internal bool IgnoreNullSourceValues { get; set; }
-        internal string? RootName { get; set; }
+        /// <summary>Destination type of the top-level call; its display name is only computed for error paths.</summary>
+        internal Type? RootType { get; set; }
 
         private List<string>? _path;
 
@@ -137,7 +139,7 @@ namespace ConventionMapper
         /// <summary>e.g. "OrderDto.Lines[3].Product".</summary>
         internal string FormatPath()
         {
-            var sb = new StringBuilder(RootName ?? string.Empty);
+            var sb = new StringBuilder(RootType == null ? string.Empty : ReflectionHelper.FriendlyName(RootType));
             if (_path != null)
             {
                 foreach (var segment in _path)

@@ -296,15 +296,21 @@ namespace ConventionMapper
 
         private FastMapEntry CreateFastEntry(Type sourceType, Type destinationType)
         {
-            CompiledMap? map = null;
+            CompiledMap? map = null, contextMap = null;
+            TypeMap? found = null;
             if (UseCompiledMappings &&
                 _typeMaps.TryGetValue(new TypePair(sourceType, destinationType), out var typeMap) &&
                 typeMap.DerivedMaps.Count == 0 && typeMap.TypeConverter == null)
             {
                 var plan = typeMap.GetCompiledPlan(Engine.Compiler);
                 if (plan != null && plan.ContextFree) map = plan.FastMap ?? plan.Map;
+                else if (plan != null)
+                {
+                    contextMap = plan.Map;
+                    found = typeMap;
+                }
             }
-            return new FastMapEntry(this, sourceType, map);
+            return new FastMapEntry(this, sourceType, map, contextMap, found);
         }
 
         public LambdaExpression BuildProjection(Type sourceType, Type destinationType) =>

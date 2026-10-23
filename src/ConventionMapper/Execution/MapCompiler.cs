@@ -300,6 +300,8 @@ namespace ConventionMapper.Execution
             private Expression BuildMember(PropertyMap map)
             {
                 var member = map.DestinationMember;
+                var conditional = TryConditionalDirect(map);
+                if (conditional != null) return conditional;
                 if (NeedsInterpreter(map))
                 {
                     _usesContext = true;
@@ -333,6 +335,72 @@ namespace ConventionMapper.Execution
                 return Expression.Block(new[] { current },
                     Expression.Assign(current, readable ? Expression.Convert(target, typeof(object)) : (Expression)Expression.Constant(null, typeof(object))),
                     Expression.Assign(target, Expression.Call(CastMethod.MakeGenericMethod(member.Type), mapped)));
+            }
+
+            /// <summary>
+            /// PreCondition / Condition / NullSubstitute on a directly assignable member, compiled in the interpreter's order:
+            ///   if (pre(src, dest, ctx)) { current = dest.X; value = src.X; if (cond(src, dest, value, current, ctx)) dest.X = value ?? substitute; }
+            /// </summary>
+            private Expression? TryConditionalDirect(PropertyMap map)
+            {
+                if (map.PreCondition == null && map.Condition == null && !map.HasNullSubstitute) return null;
+                if (map.UseDestinationValue || map.Transformers.Length > 0 || map.Source == null || !CanAssign(map.DestinationMember)) return null;
+
+                var member = map.DestinationMember;
+                var direct = _owner.TryDirect(map.Source, _src, member.Type, _typeMap.Profile);
+                if (direct == null) return null;
+
+                Expression? substitute = null;
+                var canBeNull = !member.Type.IsValueType || Nullable.GetUnderlyingType(member.Type) != null;
+                if (map.HasNullSubstitute && canBeNull)
+                {
+                    var value = map.NullSubstitute;
+                    var underlying = Nullable.GetUnderlyingType(member.Type) ?? member.Type;
+                    if (value == null) substitute = Expression.Constant(null, member.Type);
+                    else if (value.GetType() == underlying) substitute = To(Expression.Constant(value, underlying), member.Type);
+                    else return null; // needs a conversion: leave it to the interpreter
+                }
+
+                var target = MemberAccess(_dest, member.Member);
+                var result = Expression.Variable(member.Type, "value");
+                var skip = Expression.Label("skipMember");
+                var variables = new List<ParameterExpression> { result };
+                var statements = new List<Expression>();
+
+                if (map.PreCondition != null)
+                {
+                    _usesContext = true;
+                    statements.Add(Expression.IfThen(
+                        Expression.Not(Expression.Invoke(Expression.Constant(map.PreCondition), _srcObj, DestAsObject, _ctx)),
+                        Expression.Goto(skip)));
+                }
+
+                ParameterExpression? current = null;
+                if (map.Condition != null)
+                {
+                    current = Expression.Variable(typeof(object), "current");
+                    variables.Add(current);
+                    var readable = !(member.Member is PropertyInfo property) || property.GetGetMethod() != null;
+                    statements.Add(Expression.Assign(current, readable ? Expression.Convert(target, typeof(object)) : (Expression)Expression.Constant(null)));
+                }
+
+                statements.Add(Expression.Assign(result, direct));
+
+                if (map.Condition != null)
+                {
+                    _usesContext = true;
+                    statements.Add(Expression.IfThen(
+                        Expression.Not(Expression.Invoke(Expression.Constant(map.Condition), _srcObj, DestAsObject,
+                            Expression.Convert(result, typeof(object)), current!, _ctx)),
+                        Expression.Goto(skip)));
+                }
+
+                if (substitute != null)
+                    statements.Add(Expression.IfThen(Expression.Equal(result, Expression.Constant(null, member.Type)), Expression.Assign(result, substitute)));
+
+                statements.Add(Expression.Assign(target, result));
+                statements.Add(Expression.Label(skip));
+                return Expression.Block(typeof(void), variables, statements);
             }
 
             /// <summary>Nested objects and collections whose maps are compiled are called directly instead of through the engine.</summary>
@@ -419,16 +487,22 @@ namespace ConventionMapper.Execution
     /// <summary>A compiled, context-free map for one source/destination pair (Map is null when the pair is not eligible).</summary>
     internal sealed class FastMapEntry
     {
-        public FastMapEntry(MapperConfiguration configuration, Type sourceType, CompiledMap? map)
+        public FastMapEntry(MapperConfiguration configuration, Type sourceType, CompiledMap? map, CompiledMap? contextMap = null, TypeMap? typeMap = null)
         {
             Configuration = configuration;
             SourceType = sourceType;
             Map = map;
+            ContextMap = contextMap;
+            TypeMap = typeMap;
         }
 
         public readonly MapperConfiguration Configuration;
         public readonly Type SourceType;
         public readonly CompiledMap? Map;
+
+        /// <summary>Compiled map that needs a ResolutionContext (resolvers, conditions, actions); called without the engine lookup.</summary>
+        public readonly CompiledMap? ContextMap;
+        public readonly TypeMap? TypeMap;
     }
 
     /// <summary>Static generic cache for mapper.Map&lt;TSource, TDestination&gt;: one field read instead of a dictionary lookup.</summary>

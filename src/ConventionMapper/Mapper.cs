@@ -81,6 +81,7 @@ namespace ConventionMapper
                 var entry = entries[i];
                 if (entry.SourceType != sourceType || !ReferenceEquals(entry.Configuration, _configuration)) continue;
                 if (entry.Map != null && TryFast(entry.Map, source, out TDestination fast)) return fast;
+                if (entry.ContextMap != null) return As<TDestination>(RunCompiled(entry, source, typeof(TDestination)));
                 return As<TDestination>(Run(source, null, sourceType, typeof(TDestination), null));
             }
 
@@ -99,11 +100,41 @@ namespace ConventionMapper
                 if (entry != null && ReferenceEquals(entry.Configuration, _configuration))
                 {
                     if (entry.Map != null && TryFast(entry.Map, source, out TDestination fast)) return fast;
+                    if (entry.ContextMap != null) return As<TDestination>(RunCompiled(entry, source, typeof(TDestination)));
                     return As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
                 }
             }
             if (source != null) _configuration.TryPopulateFastCache<TSource, TDestination>();
             return As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
+        }
+
+        /// <summary>
+        /// A compiled map that needs a context, called without the engine's type map lookup. Equivalent to
+        /// MapRoot -> Map -> MapWithTypeMap for a call without options, including how errors are reported.
+        /// </summary>
+        private object? RunCompiled(FastMapEntry entry, object source, Type destinationType)
+        {
+            var engine = _configuration.Engine;
+            var pooled = _configuration.UseContextPooling;
+            var context = pooled ? ResolutionContext.Rent(engine, _serviceCtor, null) : new ResolutionContext(engine, _serviceCtor, null);
+            try
+            {
+                context.RootType = destinationType;
+                return entry.ContextMap!(source, null, context);
+            }
+            catch (MappingException ex)
+            {
+                ex.CapturePath(context);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw MappingException.ForTypes(entry.TypeMap!.SourceType, entry.TypeMap.DestinationType, ex).CapturePath(context);
+            }
+            finally
+            {
+                if (pooled) ResolutionContext.Return(context);
+            }
         }
 
         /// <summary>The fast path tracks no member path; on failure the call is re-run on the full path for a precise error.</summary>

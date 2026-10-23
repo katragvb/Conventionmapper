@@ -21,7 +21,7 @@ namespace ConventionMapper.Execution
 
         public object? MapRoot(object? source, Type sourceType, Type destinationType, object? destination, ResolutionContext context, MappingOperationOptions? options)
         {
-            context.RootName = ReflectionHelper.FriendlyName(destinationType);
+            context.RootType = destinationType;
             if (options != null && options.IgnoreNulls) context.IgnoreNullSourceValues = true;
 
             var before = options?.BeforeMapAction;
