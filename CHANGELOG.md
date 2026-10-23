@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.5.0 (unreleased)
+## 1.6.0 (unreleased)
+
+### Source generator: database projections
+- `IQueryable<TDest> M(this IQueryable<TSource> query)` and `Expression<Func<TSource, TDest>> M()` generate a cached LINQ expression that EF Core translates to SQL, selecting only the columns the DTO needs. Flattening, nested objects, collections, enums (as `CASE WHEN`), nullable values and record constructors are supported. Tested against SQLite through EF Core in CI.
+- New warning CM0010 when a projection reaches a recursive type.
+
+### Project
+- `CONTRIBUTING.md`, `SECURITY.md` (private vulnerability reporting), issue and pull request templates, Dependabot for GitHub Actions and NuGet.
+
+## 1.5.0 (2026-10-23)
 
 ### Data-leak guard
 - `[Sensitive]` marks members (password hashes, tokens, personal data) that must not be copied into a destination member that is not `[Sensitive]` too.

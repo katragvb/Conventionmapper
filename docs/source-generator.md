@@ -57,6 +57,32 @@ Mappers can be static or instance classes, nested inside other partial types, an
 
 Values of the same type are assigned as they are (reference types are not cloned).
 
+## Database queries (EF Core projections)
+
+Declare a projection and the generator writes a LINQ expression that EF Core (or any LINQ provider) translates to SQL, so only the columns the DTO needs are queried:
+
+```csharp
+[GeneratedMapper]
+public static partial class OrderMapper
+{
+    // Use on any IQueryable: db.Orders.Where(...).ProjectToDto()
+    public static partial IQueryable<OrderDto> ProjectToDto(this IQueryable<Order> query);
+
+    // Or get the expression itself: db.Orders.Select(OrderMapper.Projection())
+    public static partial Expression<Func<Order, OrderDto>> Projection();
+}
+
+var dtos = await db.Orders.Where(o => o.Status == OrderStatus.Shipped).ProjectToDto().ToListAsync();
+```
+
+The same conventions apply (names, flattening, nested objects, collections, enums, nullable values, constructors and records). The generated expression is created once and cached, which also lets EF Core cache the query. Within a projection:
+
+* Navigation is plain (`x.Customer.Address.City`); the database handles null navigations.
+* Nested objects are created inline with a null check, collections with `Select(...).ToList()` or `ToArray()`.
+* Enums map by name with a conditional that becomes `CASE WHEN` in SQL.
+* Your own static conversion methods are called as they are, so EF Core runs them after the query, on the client.
+* A type that contains itself (a tree) cannot be expanded; that member is left null with warning CM0010.
+
 ## Your own conversions
 
 Any static method in the mapper class that takes one value and returns another is used wherever those two types meet, and it takes priority over the built-in conversions:
@@ -98,6 +124,7 @@ public static partial OrderDto ToDto(Order order);
 | CM0006 | Error | The method signature is not a supported mapping method. |
 | CM0007 | Warning | A source enum value has no destination value with the same name; mapping it throws. |
 | CM0009 | Error | A `[Sensitive]` source member would be copied into a destination member that is not `[Sensitive]`. Add `[MapIgnore]`, or mark the destination `[Sensitive]`. |
+| CM0010 | Warning | A projection reaches a type that contains itself; the recursive member is left null. |
 | CM0008 | Warning | `[MapMember]` / `[MapIgnore]` names a member that does not exist. |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.

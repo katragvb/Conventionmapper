@@ -1,0 +1,36 @@
+name: Bug report
+description: Something maps incorrectly, fails, or a diagnostic is wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead (include the exception message if there is one).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal example
+      description: Source and destination classes plus the configuration or [GeneratedMapper] class.
+      render: csharp
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - ConventionMapper (runtime)
+        - ConventionMapper.SourceGenerator
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version and target framework
+      placeholder: e.g. 1.6.0, net8.0
+    validations:
+      required: true

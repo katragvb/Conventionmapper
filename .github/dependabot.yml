@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: monthly
+    ignore:
+      # Roslyn and Microsoft.Extensions versions are pinned on purpose: newer versions would raise the minimum SDK / runtime for users.
+      - dependency-name: Microsoft.CodeAnalysis*
+      - dependency-name: Microsoft.Extensions.*
+      - dependency-name: Microsoft.EntityFrameworkCore*

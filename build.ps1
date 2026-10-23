@@ -1,5 +1,5 @@
 # Usage: ./build.ps1 -Version 1.0.0
-param([string]$Version = "1.5.0")
+param([string]$Version = "1.6.0")
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 

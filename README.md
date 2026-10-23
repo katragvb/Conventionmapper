@@ -86,12 +86,16 @@ public static partial class OrderMapper
     public static partial OrderDto ToDto(this Order order);
 
     public static partial void Update(OrderDto source, Order target);
+
+    // EF Core: translated to SQL, only the needed columns are selected
+    public static partial IQueryable<OrderDto> ProjectToDto(this IQueryable<Order> query);
 }
 
 OrderDto dto = order.ToDto();
+List<OrderDto> shipped = await db.Orders.Where(o => o.Shipped).ProjectToDto().ToListAsync();
 ```
 
-The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). Static methods in the mapper class, such as `private static string Format(Money m)`, are used for every member of those types. The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). The [Native AOT sample](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.Aot) is published with `PublishAot=true` and run on every CI build. See [docs/source-generator.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md).
+The generator implements the partial methods at compile time with the same conventions as the runtime mapper (names, flattening, `Get` methods, constructors and records, nested objects, collections, dictionaries, enums, nullable and numeric conversions). Static methods in the mapper class, such as `private static string Format(Money m)`, are used for every member of those types. Projection methods (`IQueryable<TDest> M(IQueryable<TSource>)` or `Expression<Func<TSource, TDest>> M()`) produce expressions that EF Core translates to SQL, tested against a real database in CI. The result is ordinary C# you can step through, with no runtime dependency, so it works with Native AOT and trimming. An unmapped destination member is a build error (`CM0001`). The [Native AOT sample](https://github.com/katragvb/Conventionmapper/tree/main/samples/ConventionMapper.Sample.Aot) is published with `PublishAot=true` and run on every CI build. See [docs/source-generator.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md).
 
 ## Analyzers
 
@@ -505,10 +509,14 @@ dotnet publish samples/ConventionMapper.Sample.Aot -c Release -r linux-x64 -o ou
 ## Building and publishing
 
 ```
-./build.sh 1.5.0      # or ./build.ps1 -Version 1.5.0
+./build.sh 1.6.0      # or ./build.ps1 -Version 1.6.0
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.5.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.5.0.nupkg` to `./artifacts`. Pushing a `v1.5.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.1.6.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.6.0.nupkg` to `./artifacts`. Pushing a `v1.6.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+
+## Contributing
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](https://github.com/katragvb/Conventionmapper/blob/main/CONTRIBUTING.md). Report security problems privately as described in [SECURITY.md](https://github.com/katragvb/Conventionmapper/blob/main/SECURITY.md).
 
 ## Changelog
 
