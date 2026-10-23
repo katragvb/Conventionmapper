@@ -22,9 +22,8 @@ namespace ConventionMapper
     internal sealed class MappingOperationOptions : IMappingOperationOptions
     {
         private Dictionary<string, object>? _items;
-        private Dictionary<string, object>? _ownItems; // created on demand by Items, kept across pooled calls
 
-        public IDictionary<string, object> Items => _items ??= (_ownItems ??= new Dictionary<string, object>(StringComparer.Ordinal));
+        public IDictionary<string, object> Items => _items ??= new Dictionary<string, object>(StringComparer.Ordinal);
         internal Dictionary<string, object>? RawItems => _items;
         internal Action<object, object>? BeforeMapAction { get; private set; }
         internal Action<object, object>? AfterMapAction { get; private set; }
@@ -43,6 +42,7 @@ namespace ConventionMapper
         private readonly MappingEngine _engine;
         private Func<Type, object> _serviceCtor;
         private Dictionary<string, object>? _items;
+        private Dictionary<string, object>? _ownItems; // created on demand by Items, kept across pooled calls
         private Dictionary<ReferenceKey, object>? _cache;
         private Dictionary<TypeMap, int>? _depths;
         private IMapper? _mapper;
@@ -108,7 +108,7 @@ namespace ConventionMapper
         }
 
         /// <summary>Items passed via <c>opt.Items</c>.</summary>
-        public IDictionary<string, object> Items => _items ??= new Dictionary<string, object>(StringComparer.Ordinal);
+        public IDictionary<string, object> Items => _items ??= (_ownItems ??= new Dictionary<string, object>(StringComparer.Ordinal));
 
         /// <summary>A mapper that shares this context (items, reference cache, depth tracking).</summary>
         public IMapper Mapper => _mapper ??= new ContextMapper(_engine, this);
