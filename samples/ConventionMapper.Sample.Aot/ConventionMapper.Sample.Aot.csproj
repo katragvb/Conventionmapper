@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Native AOT console app using only build-time mapping (ConventionMapper.SourceGenerator).
+       Warnings are errors, so any reflection or trimming problem fails the publish. CI publishes and runs it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- In your own project: <PackageReference Include="ConventionMapper.SourceGenerator" Version="..." /> -->
+    <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator\ConventionMapper.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

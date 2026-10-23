@@ -36,6 +36,8 @@ namespace ConventionMapper.SourceGenerator
         private int _counter;
         private int _memberIndent;
         private Location _location = Location.None;
+        private IMethodSymbol? _current;
+        private bool _atRoot;
 
         private MapperEmitter(INamedTypeSymbol mapper, CSharpCompilation compilation, CancellationToken ct)
         {
@@ -89,13 +91,14 @@ namespace ConventionMapper.SourceGenerator
                 }
             }
 
-            // Mapping methods the user declared can be reused for nested members of the same types.
-            foreach (var pair in methods)
+            // Static methods of the mapper that convert one type to another are reused wherever that pair occurs:
+            // the partial mapping methods themselves, and ordinary helpers such as "static string Format(Money m)".
+            // Ordinary methods win over partial ones for the same pair, because they express a deliberate choice.
+            foreach (var pair in methods) RegisterUserMap(pair.Key);
+            foreach (var member in _mapper.GetMembers())
             {
-                var method = pair.Key;
-                if (method.IsStatic && !method.IsGenericMethod && method.Parameters.Length == 1 && !method.ReturnsVoid &&
-                    method.Parameters[0].RefKind == RefKind.None && !method.ReturnsByRef)
-                    _userMaps[PairKey(method.Parameters[0].Type, method.ReturnType)] = method;
+                if (member is IMethodSymbol method && method.MethodKind == MethodKind.Ordinary && !IsPartialDefinition(method))
+                    RegisterUserMap(method, overwrite: true);
             }
 
             var hasNamespace = !_mapper.ContainingNamespace.IsGlobalNamespace;
@@ -125,6 +128,22 @@ namespace ConventionMapper.SourceGenerator
             if (hasNamespace) file.Close();
 
             return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray());
+        }
+
+        private void RegisterUserMap(IMethodSymbol method, bool overwrite = false)
+        {
+            if (!method.IsStatic || method.IsGenericMethod || method.Parameters.Length != 1 || method.ReturnsVoid ||
+                method.Parameters[0].RefKind != RefKind.None || method.ReturnsByRef || method.IsImplicitlyDeclared) return;
+            var key = PairKey(method.Parameters[0].Type, method.ReturnType);
+            if (overwrite || !_userMaps.ContainsKey(key)) _userMaps[key] = method;
+        }
+
+        private bool IsPartialDefinition(IMethodSymbol method)
+        {
+            foreach (var reference in method.DeclaringSyntaxReferences)
+                if (reference.GetSyntax(_ct) is MethodDeclarationSyntax syntax && syntax.Modifiers.Any(SyntaxKind.PartialKeyword))
+                    return true;
+            return false;
         }
 
         private string TypeKeyword(INamedTypeSymbol type)
@@ -162,6 +181,7 @@ namespace ConventionMapper.SourceGenerator
         private void EmitMethod(IMethodSymbol method, MethodDeclarationSyntax syntax, CodeWriter w)
         {
             _location = syntax.Identifier.GetLocation();
+            _current = method;
             w.Open(Signature(method, syntax));
 
             var isCreate = method.Parameters.Length == 1 && !method.ReturnsVoid;
@@ -180,7 +200,7 @@ namespace ConventionMapper.SourceGenerator
             var source = method.Parameters[0];
             if (isCreate)
             {
-                EmitCreateBody(w, source.Type, method.ReturnType, Escape(source.Name), config);
+                EmitCreateBody(w, source.Type, method.ReturnType, Escape(source.Name), config, isRoot: true);
                 CheckConfigUsage(config, method, method.ReturnType);
             }
             else
@@ -242,7 +262,7 @@ namespace ConventionMapper.SourceGenerator
         // ================================================================== bodies
 
         /// <summary>Body of "TDest Map(TSource source)": null check, then object construction or a value conversion.</summary>
-        private void EmitCreateBody(CodeWriter w, ITypeSymbol source, ITypeSymbol destination, string src, MemberConfig config)
+        private void EmitCreateBody(CodeWriter w, ITypeSymbol source, ITypeSymbol destination, string src, MemberConfig config, bool isRoot = false)
         {
             if (MemberResolver.IsNullableValueType(source, out var underlying))
             {
@@ -261,7 +281,9 @@ namespace ConventionMapper.SourceGenerator
                 return;
             }
 
+            _atRoot = isRoot;
             var value = Convert(source, destination, src, 0);
+            _atRoot = false;
             if (value == null)
             {
                 Report(Diagnostics.IncompatibleTypes, src, Short(source), Short(destination), Short(destination), Short(destination));
@@ -510,6 +532,12 @@ namespace ConventionMapper.SourceGenerator
             if (depth > 8) return null;
             if (SymbolEqualityComparer.Default.Equals(s, d)) return expr;
 
+            // A conversion method declared in the mapper class wins over the built-in conversions
+            // (but a method never calls itself for its own root conversion).
+            if (_userMaps.TryGetValue(PairKey(s, d), out var userMethod) &&
+                !(depth == 0 && SymbolEqualityComparer.Default.Equals(userMethod, _current) && _atRoot))
+                return Escape(userMethod.Name) + "(" + expr + ")";
+
             var conversion = _compilation.ClassifyConversion(s, d);
             if (conversion.Exists && conversion.IsImplicit) return expr;
 
@@ -558,10 +586,7 @@ namespace ConventionMapper.SourceGenerator
                 return CollectionHelper(s, d, sourceElement, kind, depth) is string helper ? helper + "(" + expr + ")" : null;
 
             if (IsObjectLike(s, true) && IsConstructible(d))
-            {
-                if (_userMaps.TryGetValue(PairKey(s, d), out var userMap)) return Escape(userMap.Name) + "(" + expr + ")";
                 return ObjectHelper(s, (INamedTypeSymbol)d) + "(" + expr + ")";
-            }
 
             if (conversion.Exists && conversion.IsExplicit && conversion.IsUserDefined)
                 return "(" + T(d) + ")(" + expr + ")";

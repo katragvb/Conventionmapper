@@ -96,6 +96,9 @@ namespace ConventionMapper
         {
             if (source != null && (typeof(TSource).IsValueType || source.GetType() == typeof(TSource)))
             {
+                var typed = FastMapCache<TSource, TDestination>.Typed;
+                if (typed != null && ReferenceEquals(typed.Configuration, _configuration)) return MapTyped(typed.Map, source);
+
                 var entry = FastMapCache<TSource, TDestination>.Entry;
                 if (entry != null && ReferenceEquals(entry.Configuration, _configuration))
                 {
@@ -137,6 +140,19 @@ namespace ConventionMapper
             }
         }
 
+        /// <summary>Fully inlined typed delegate; any failure is re-run on the full path, which reports the exact member.</summary>
+        private TDestination MapTyped<TSource, TDestination>(Func<TSource, TDestination> map, TSource source)
+        {
+            try
+            {
+                return map(source);
+            }
+            catch (Exception)
+            {
+                return As<TDestination>(Run(source, null, typeof(TSource), typeof(TDestination), null));
+            }
+        }
+
         /// <summary>The fast path tracks no member path; on failure the call is re-run on the full path for a precise error.</summary>
         private static bool TryFast<TDestination>(CompiledMap map, object source, out TDestination result)
         {
@@ -145,7 +161,7 @@ namespace ConventionMapper
                 result = (TDestination)map(source, null, null);
                 return true;
             }
-            catch (MappingException)
+            catch (Exception)
             {
                 result = default!;
                 return false;

@@ -274,7 +274,11 @@ namespace ConventionMapper
         {
             var current = FastMapCache<TSource, TDestination>.Entry;
             if (current != null && ReferenceEquals(current.Configuration, this)) return;
-            FastMapCache<TSource, TDestination>.Entry = CreateFastEntry(typeof(TSource), typeof(TDestination));
+            var entry = CreateFastEntry(typeof(TSource), typeof(TDestination));
+            FastMapCache<TSource, TDestination>.Typed = entry.Typed is Func<TSource, TDestination> typed
+                ? new TypedFastEntry<TSource, TDestination>(this, typed)
+                : null;
+            FastMapCache<TSource, TDestination>.Entry = entry;
         }
 
         internal void TryPopulateFastCacheForSource<TDestination>(Type sourceType)
@@ -297,20 +301,25 @@ namespace ConventionMapper
         private FastMapEntry CreateFastEntry(Type sourceType, Type destinationType)
         {
             CompiledMap? map = null, contextMap = null;
+            Delegate? typed = null;
             TypeMap? found = null;
             if (UseCompiledMappings &&
                 _typeMaps.TryGetValue(new TypePair(sourceType, destinationType), out var typeMap) &&
                 typeMap.DerivedMaps.Count == 0 && typeMap.TypeConverter == null)
             {
                 var plan = typeMap.GetCompiledPlan(Engine.Compiler);
-                if (plan != null && plan.ContextFree) map = plan.FastMap ?? plan.Map;
+                if (plan != null && plan.ContextFree)
+                {
+                    map = plan.FastMap ?? plan.Map;
+                    typed = plan.TypedFastMap;
+                }
                 else if (plan != null)
                 {
                     contextMap = plan.Map;
                     found = typeMap;
                 }
             }
-            return new FastMapEntry(this, sourceType, map, contextMap, found);
+            return new FastMapEntry(this, sourceType, map, contextMap, found, typed);
         }
 
         public LambdaExpression BuildProjection(Type sourceType, Type destinationType) =>

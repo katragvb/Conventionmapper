@@ -23,8 +23,23 @@ jobs:
           dotnet-version: '8.0.x'
       - run: dotnet test tests/ConventionMapper.Tests/ConventionMapper.Tests.csproj -c Release --logger GitHubActions
 
+  aot:
+    # Publishes the Native AOT sample (warnings as errors) and runs it: proves the generated code needs no reflection.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Publish with Native AOT
+        run: dotnet publish samples/ConventionMapper.Sample.Aot/ConventionMapper.Sample.Aot.csproj -c Release -r linux-x64 -o aot-out
+      - name: Run the native binary
+        run: ./aot-out/ConventionMapper.Sample.Aot
+
   pack:
-    needs: test
+    needs: [ test, aot ]
     runs-on: ubuntu-latest
     permissions:
       contents: read

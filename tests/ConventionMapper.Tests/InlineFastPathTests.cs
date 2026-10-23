@@ -81,6 +81,7 @@ namespace ConventionMapper.Tests
             Assert.NotNull(plan);
             Assert.True(plan!.ContextFree);
             Assert.NotNull(plan.FastMap);
+            Assert.IsType<Func<InSource, InDest>>(plan.TypedFastMap);
         }
 
         [Fact]

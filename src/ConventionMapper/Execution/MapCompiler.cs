@@ -26,6 +26,9 @@ namespace ConventionMapper.Execution
         /// </summary>
         public CompiledMap? FastMap { get; internal set; }
 
+        /// <summary>Func&lt;TSource, TDestination&gt; variant of <see cref="FastMap"/> for Map&lt;TSource, TDestination&gt;.</summary>
+        public Delegate? TypedFastMap { get; internal set; }
+
         /// <summary>True when the delegate never touches the ResolutionContext, so it can run without one (fast path).</summary>
         public bool ContextFree { get; }
     }
@@ -61,7 +64,7 @@ namespace ConventionMapper.Execution
             try
             {
                 var plan = new Builder(this, typeMap).Build();
-                if (plan.ContextFree) plan.FastMap = TryBuildInlined(typeMap);
+                if (plan.ContextFree) TryBuildInlined(typeMap, plan);
                 return plan;
             }
             catch (Exception)
@@ -487,8 +490,9 @@ namespace ConventionMapper.Execution
     /// <summary>A compiled, context-free map for one source/destination pair (Map is null when the pair is not eligible).</summary>
     internal sealed class FastMapEntry
     {
-        public FastMapEntry(MapperConfiguration configuration, Type sourceType, CompiledMap? map, CompiledMap? contextMap = null, TypeMap? typeMap = null)
+        public FastMapEntry(MapperConfiguration configuration, Type sourceType, CompiledMap? map, CompiledMap? contextMap = null, TypeMap? typeMap = null, Delegate? typed = null)
         {
+            Typed = typed;
             Configuration = configuration;
             SourceType = sourceType;
             Map = map;
@@ -499,6 +503,7 @@ namespace ConventionMapper.Execution
         public readonly MapperConfiguration Configuration;
         public readonly Type SourceType;
         public readonly CompiledMap? Map;
+        public readonly Delegate? Typed;
 
         /// <summary>Compiled map that needs a ResolutionContext (resolvers, conditions, actions); called without the engine lookup.</summary>
         public readonly CompiledMap? ContextMap;
@@ -509,6 +514,21 @@ namespace ConventionMapper.Execution
     internal static class FastMapCache<TSource, TDestination>
     {
         public static FastMapEntry? Entry;
+
+        /// <summary>Strongly typed delegate for the same pair, when the map could be fully inlined.</summary>
+        public static TypedFastEntry<TSource, TDestination>? Typed;
+    }
+
+    internal sealed class TypedFastEntry<TSource, TDestination>
+    {
+        public TypedFastEntry(MapperConfiguration configuration, Func<TSource, TDestination> map)
+        {
+            Configuration = configuration;
+            Map = map;
+        }
+
+        public readonly MapperConfiguration Configuration;
+        public readonly Func<TSource, TDestination> Map;
     }
 
     /// <summary>Static generic cache for mapper.Map&lt;TDestination&gt;(object): up to 8 source types per destination.</summary>

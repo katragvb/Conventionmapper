@@ -9,15 +9,16 @@ namespace ConventionMapper.Execution
 {
     internal sealed partial class MapCompiler
     {
-        private CompiledMap? TryBuildInlined(TypeMap typeMap)
+        private void TryBuildInlined(TypeMap typeMap, CompiledPlan plan)
         {
             try
             {
-                return new InlineBuilder(this, typeMap).Build();
+                plan.FastMap = new InlineBuilder(this, typeMap).Build();
+                plan.TypedFastMap = new InlineBuilder(this, typeMap).BuildTyped();
             }
             catch (Exception)
             {
-                return null; // keep the regular compiled delegate
+                // keep the regular compiled delegate
             }
         }
 
@@ -36,7 +37,6 @@ namespace ConventionMapper.Execution
 
             private static readonly MethodInfo CastMethod = typeof(CastHelper).GetMethod(nameof(CastHelper.Cast))!;
             private static readonly MethodInfo InvokeNestedMethod = typeof(MappingEngine).GetMethod(nameof(MappingEngine.InvokeNested))!;
-            private static readonly MethodInfo MemberFailedMethod = typeof(MappingEngine).GetMethod(nameof(MappingEngine.MemberFailed))!;
             private static readonly MethodInfo MoveNextMethod = typeof(IEnumerator).GetMethod(nameof(IEnumerator.MoveNext))!;
             private static readonly MethodInfo DisposeMethod = typeof(IDisposable).GetMethod(nameof(IDisposable.Dispose))!;
 
@@ -50,6 +50,7 @@ namespace ConventionMapper.Execution
                 _root = root;
             }
 
+            /// <summary>Object-typed fast delegate for Map&lt;TDestination&gt;(object). No try/catch: callers re-run failures on the full path.</summary>
             public CompiledMap? Build()
             {
                 if (!IsInlinable(_root)) return null;
@@ -59,13 +60,10 @@ namespace ConventionMapper.Execution
                 var ctx = Expression.Parameter(typeof(ResolutionContext), "context");
                 var src = Expression.Variable(_root.SourceType, "src");
                 var dest = Expression.Variable(_root.DestinationType, "dest");
-                var step = Expression.Variable(typeof(int), "step");
 
                 var create = CreateNew(_root, src);
                 if (create == null) return null;
 
-                _inlining.Add(_root);
-                var names = new List<string>();
                 var body = new List<Expression>
                 {
                     Expression.Assign(src, Expression.Convert(srcObj, _root.SourceType)),
@@ -74,30 +72,40 @@ namespace ConventionMapper.Execution
                         create,
                         Expression.Convert(destObj, _root.DestinationType)))
                 };
+                if (!AddMembers(body, src, dest)) return null;
+                body.Add(Expression.Convert(dest, typeof(object)));
+                return Expression.Lambda<CompiledMap>(Expression.Block(typeof(object), new[] { src, dest }, body), srcObj, destObj, ctx).Compile();
+            }
+
+            /// <summary>
+            /// Strongly typed Func&lt;TSource, TDestination&gt; for Map&lt;TSource, TDestination&gt;: no casts, no boxing, no try/catch.
+            /// </summary>
+            public Delegate? BuildTyped()
+            {
+                if (!IsInlinable(_root)) return null;
+
+                var src = Expression.Parameter(_root.SourceType, "source");
+                var dest = Expression.Variable(_root.DestinationType, "dest");
+                var create = CreateNew(_root, src);
+                if (create == null) return null;
+
+                var body = new List<Expression> { Expression.Assign(dest, create) };
+                if (!AddMembers(body, src, dest)) return null;
+                body.Add(dest);
+                var funcType = typeof(Func<,>).MakeGenericType(_root.SourceType, _root.DestinationType);
+                return Expression.Lambda(funcType, Expression.Block(_root.DestinationType, new[] { dest }, body), src).Compile();
+            }
+
+            private bool AddMembers(List<Expression> body, Expression src, ParameterExpression dest)
+            {
+                _inlining.Add(_root);
                 foreach (var map in _root.OrderedPropertyMaps)
                 {
                     var member = Member(_root, map, src, dest, 0);
-                    if (member == null) return null;
-                    body.Add(Expression.Assign(step, Expression.Constant(names.Count)));
-                    names.Add(map.DestinationName);
+                    if (member == null) return false;
                     body.Add(member);
                 }
-                body.Add(Expression.Assign(step, Expression.Constant(-1)));
-                body.Add(Expression.Empty());
-
-                var exception = Expression.Variable(typeof(Exception), "ex");
-                var guarded = Expression.TryCatch(
-                    Expression.Block(typeof(void), body),
-                    Expression.Catch(exception, Expression.Throw(
-                        Expression.Call(MemberFailedMethod, Expression.Constant(_root), Expression.Constant(names.ToArray()), step, exception,
-                            Expression.Constant(null, typeof(ResolutionContext))),
-                        typeof(void))));
-
-                var block = Expression.Block(typeof(object), new[] { src, dest, step },
-                    Expression.Assign(step, Expression.Constant(-1)),
-                    guarded,
-                    Expression.Convert(dest, typeof(object)));
-                return Expression.Lambda<CompiledMap>(block, srcObj, destObj, ctx).Compile();
+                return true;
             }
 
             private static bool IsInlinable(TypeMap t) =>

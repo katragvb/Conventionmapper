@@ -88,6 +88,34 @@ public class Dest { public int Id { get; set; } public string Missing { get; set
         }
 
         [Fact]
+        public void Static_conversion_methods_in_the_mapper_are_used()
+        {
+            var result = Generate(Models + @"
+public class Dest { public int Id { get; set; } public string Address { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    public static partial Dest Map(Source s);
+    private static string Describe(Address a) => a.City;
+}");
+
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Empty(result.CompileErrors);
+            Assert.Contains("Describe(s.Address)", result.Source);
+        }
+
+        [Fact]
+        public void A_mapping_method_does_not_call_itself_for_its_own_root_conversion()
+        {
+            var result = Generate(Models + @"
+public enum A { One, Two }
+public enum B { One, Two }
+[GeneratedMapper] public static partial class M { public static partial B Map(A value); }");
+
+            Assert.Empty(result.CompileErrors);
+            Assert.DoesNotContain("return Map(value);", result.Source);
+        }
+
+        [Fact]
         public void Mapper_must_be_partial()
         {
             var result = Generate(Models + @"

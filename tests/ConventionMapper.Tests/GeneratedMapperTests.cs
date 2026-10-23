@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using ConventionMapper;
 
@@ -92,8 +93,32 @@ namespace ConventionMapper.Tests.Generated
         public partial GenPerson Clone(GenPerson source);
     }
 
+    public class GenMoney { public decimal Amount { get; set; } public string Currency { get; set; } = "USD"; }
+    public class GenProduct { public string Name { get; set; } = ""; public GenMoney Price { get; set; } = new GenMoney(); public decimal Weight { get; set; } }
+    public class GenProductDto { public string Name { get; set; } = ""; public string Price { get; set; } = ""; public string Weight { get; set; } = ""; }
+
+    [GeneratedMapper]
+    public static partial class GenProductMapper
+    {
+        public static partial GenProductDto ToDto(GenProduct product);
+
+        // Ordinary static methods are used for every member of these types.
+        private static string Format(GenMoney money) => money.Amount.ToString("0.00", CultureInfo.InvariantCulture) + " " + money.Currency;
+        private static string Format(decimal value) => value.ToString("0.000", CultureInfo.InvariantCulture);
+    }
+
     public class GeneratedMapperTests
     {
+        [Fact]
+        public void User_conversion_methods_are_used_and_win_over_built_in_conversions()
+        {
+            var dto = GenProductMapper.ToDto(new GenProduct { Name = "Pen", Price = new GenMoney { Amount = 2.5m, Currency = "EUR" }, Weight = 5m });
+
+            Assert.Equal("Pen", dto.Name);
+            Assert.Equal("2.50 EUR", dto.Price);
+            Assert.Equal("5.000", dto.Weight);
+        }
+
         private static GenOrder SampleOrder() => new GenOrder
         {
             Id = 42,
