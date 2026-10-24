@@ -24,7 +24,7 @@ namespace ConventionMapper.Tests
             var config = new MapperConfiguration(cfg =>
             {
                 cfg.CreateMap<FlowCustomer, FlowCustomerDto>()
-                    .ForMember(d => d.Label, o => o.MapFrom(s => s.Name.ToUpper()))
+                    .ForMember(d => d.Label, o => o.MapFrom(s => s.Name + "!"))
                     .ForMember(d => d.Internal, o => o.Ignore());
                 cfg.CreateMap<SecUser, SecProtectedDto>();
                 cfg.CreateMap<SecUser, SecUserDto>();
