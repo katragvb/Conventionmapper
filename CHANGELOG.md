@@ -1,6 +1,18 @@
 # Changelog
 
-## 1.6.0 (unreleased)
+## 1.7.0 (unreleased)
+
+### Data-flow reports
+- `config.DataFlowReport()` returns a Markdown report of every map: where each destination member gets its value (matching name, flattened path, computed, ignored, not mapped) and every place a `[Sensitive]` member is copied to. Useful for code reviews and privacy audits.
+- The source generator writes the same report for the `[GeneratedMapper]` classes of each assembly into `ConventionMapper.Generated.DataFlowReport.Markdown`, so it is known at build time.
+
+### "Generate build-time mapper" refactoring
+- On a `CreateMap<TSource, TDestination>()` call, the IDE offers to add a new file with the equivalent `[GeneratedMapper]` class. `Ignore()`, `MapFrom(s => s.A.B)`, `MapFrom("A.B")` and `ReverseMap()` are translated; anything else is listed at the top of the file to convert by hand.
+
+### Tests
+- The IDE quick fixes (CM1001, CM1002) and the refactoring are tested in a Roslyn workspace.
+
+## 1.6.0 (2026-10-24)
 
 ### Source generator: database projections
 - `IQueryable<TDest> M(this IQueryable<TSource> query)` and `Expression<Func<TSource, TDest>> M()` generate a cached LINQ expression that EF Core translates to SQL, selecting only the columns the DTO needs. Flattening, nested objects, collections, enums (as `CASE WHEN`), nullable values and record constructors are supported. Tested against SQLite through EF Core in CI.
