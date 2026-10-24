@@ -353,6 +353,13 @@ namespace ConventionMapper
 
         public string Explain<TSource, TDestination>() => Explain(typeof(TSource), typeof(TDestination));
 
+        /// <summary>
+        /// A Markdown report of every map: where each destination member gets its value (member path, flattening,
+        /// expression, resolver, ignored, not mapped) and where members marked [Sensitive] can flow.
+        /// Write it to a file in a test or at startup to keep an audit-ready record of your data flows.
+        /// </summary>
+        public string DataFlowReport() => DataFlowReporter.Build(_typeMaps.Values);
+
         public string Explain(Type sourceType, Type destinationType)
         {
             var typeMap = FindTypeMapCore(sourceType, destinationType)
