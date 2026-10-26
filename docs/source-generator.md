@@ -104,6 +104,39 @@ Partial mapping methods are reused the same way for nested objects, so declaring
 
 Mark members such as password hashes or tokens `[Sensitive]`. Copying one into a destination member that is not also `[Sensitive]` is build error CM0009, so it can't reach a DTO by accident. Projects that use only the generator get the attribute automatically. With the runtime `ConventionMapper` package installed too, its attribute is used.
 
+## Data-flow report
+
+Each assembly with `[GeneratedMapper]` classes also gets `ConventionMapper.Generated.DataFlowReport.Markdown` (internal), a Markdown report of every generated map: where each destination member gets its value, which members are ignored, and every place a `[Sensitive]` member is copied to. It is produced by the build, so it always matches the code. A common use is a snapshot test:
+
+```csharp
+[Fact]
+public void Data_flows_are_reviewed()
+{
+    var expected = File.ReadAllText("data-flow.md");
+    Assert.Equal(expected, ConventionMapper.Generated.DataFlowReport.Markdown);
+}
+```
+
+A new flow of personal data then fails the test until `data-flow.md` is updated, which puts the change in front of a reviewer. The runtime package has the same report for runtime maps: `config.DataFlowReport()`.
+
+## Moving a runtime map to the generator
+
+With the `ConventionMapper` package installed, the IDE offers **Generate build-time mapper for S → D** on any `CreateMap<S, D>()` call (Ctrl+. in Visual Studio and Rider, Cmd+. in VS Code). It adds a new file with the equivalent mapper class:
+
+```csharp
+// CreateMap<Order, OrderDto>().ForMember(d => d.Buyer, o => o.MapFrom(s => s.Customer.Name)).ReverseMap();
+[GeneratedMapper]
+public static partial class OrderMapper
+{
+    [MapMember("Customer.Name", "Buyer")]
+    public static partial OrderDto ToOrderDto(this Order source);
+
+    public static partial Order ToOrder(this OrderDto source);
+}
+```
+
+`Ignore()`, `MapFrom` with a member path and `ReverseMap()` are translated. Other options (conditions, resolvers, converters) are listed in a comment at the top of the file so you can convert them by hand, usually as a static conversion method in the same class. Once the project builds, remove the `CreateMap` call.
+
 ## Configuring members
 
 ```csharp
@@ -124,8 +157,8 @@ public static partial OrderDto ToDto(Order order);
 | CM0006 | Error | The method signature is not a supported mapping method. |
 | CM0007 | Warning | A source enum value has no destination value with the same name; mapping it throws. |
 | CM0009 | Error | A `[Sensitive]` source member would be copied into a destination member that is not `[Sensitive]`. Add `[MapIgnore]`, or mark the destination `[Sensitive]`. |
-| CM0010 | Warning | A projection reaches a type that contains itself; the recursive member is left null. |
 | CM0008 | Warning | `[MapMember]` / `[MapIgnore]` names a member that does not exist. |
+| CM0010 | Warning | A projection reaches a type that contains itself; the recursive member is left null. |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.
 

@@ -105,6 +105,8 @@ The `ConventionMapper` package ships a Roslyn analyzer with code fixes:
 * **CM1002:** `mapper.Map<TDestination>(source)` where the source type is known. The fix rewrites it to the faster `Map<TSource, TDestination>(source)`.
 * **CM1003 (error):** `CreateMap<,>()` would copy a `[Sensitive]` member into a member that isn't. The fix ignores the member.
 
+* **Generate build-time mapper (refactoring):** on any `CreateMap<TSource, TDestination>()` call, adds a file with the equivalent `[GeneratedMapper]` class, translating `Ignore`, `MapFrom` member paths and `ReverseMap`, so moving a map to the source generator takes one click.
+
 Make CM1001 a build error with `dotnet_diagnostic.CM1001.severity = error` in `.editorconfig`. See [docs/analyzers.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/analyzers.md).
 
 ## Data-leak guard ([Sensitive])
@@ -139,6 +141,33 @@ It is checked in three places:
 * **At startup:** `new MapperConfiguration(...)` throws `MapperConfigurationException`, for maps the analyzer cannot see.
 
 To allow a copy on purpose (for example into a cache entry that is protected too), mark the destination member `[Sensitive]` as well. Sensitive data can only flow into sensitive members.
+
+### Data-flow report
+
+For code reviews and privacy audits, get every flow of data through the configuration as Markdown:
+
+```csharp
+File.WriteAllText("data-flow.md", config.DataFlowReport());
+```
+
+```
+## Sensitive members
+
+| Member | Copied to |
+| --- | --- |
+| `User.PasswordHash` | not copied anywhere |
+| `User.ApiToken` | `CacheEntry.ApiToken` (protected) |
+
+### `Order` → `OrderDto`
+
+| Destination | Source | Notes |
+| --- | --- | --- |
+| CustomerName | `Customer.Name` | flattened |
+| Total | `GetTotal()` |  |
+| InternalNotes | — | ignored |
+```
+
+The source generator writes the same report for generated mappers at build time, in `ConventionMapper.Generated.DataFlowReport.Markdown`; a unit test can save it, or compare it with a checked-in copy so any new flow of personal data shows up in the pull request.
 
 ## Change tracking (MapWithChanges)
 

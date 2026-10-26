@@ -37,6 +37,10 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>Ordinary (non-partial) static conversion methods; the only user methods used inside projections.</summary>
         private readonly Dictionary<string, IMethodSymbol> _conversionMethods = new Dictionary<string, IMethodSymbol>(StringComparer.Ordinal);
         private readonly HashSet<string> _reportedEnumPairs = new HashSet<string>(StringComparer.Ordinal);
+
+        // Data-flow report: "`S` → `D`" -> destination member -> table row; sensitive member -> destinations.
+        private readonly SortedDictionary<string, SortedDictionary<string, string>> _flows = new SortedDictionary<string, SortedDictionary<string, string>>(StringComparer.Ordinal);
+        private readonly SortedDictionary<string, SortedSet<string>> _sensitive = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         private int _counter;
         private int _memberIndent;
         private Location _location = Location.None;
@@ -131,7 +135,7 @@ namespace ConventionMapper.SourceGenerator
             foreach (var _ in chain) file.Close();
             if (hasNamespace) file.Close();
 
-            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray());
+            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray(), BuildReport());
         }
 
         private void RegisterUserMap(IMethodSymbol method, bool overwrite = false)
@@ -318,6 +322,7 @@ namespace ConventionMapper.SourceGenerator
             var assignments = new List<string>();
             foreach (var member in GetWritableMembers(destination, false))
             {
+                if (config.Ignored.Contains(member.Name)) RecordIgnored(source, destination, member);
                 if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
                 var value = MapMember(source, src, member, destination, config);
                 if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
@@ -359,9 +364,14 @@ namespace ConventionMapper.SourceGenerator
                 return;
             }
 
+            RecordMap(source, named);
             foreach (var member in GetWritableMembers(named, true))
             {
-                if (config.Ignored.Contains(member.Name)) continue;
+                if (config.Ignored.Contains(member.Name))
+                {
+                    RecordIgnored(source, named, member);
+                    continue;
+                }
                 var value = MapMember(source, src, member, named, config);
                 if (value != null) w.Line(dest + "." + Escape(member.Name) + " = " + value + ";");
             }
@@ -375,10 +385,12 @@ namespace ConventionMapper.SourceGenerator
                 .OrderByDescending(c => c.Parameters.Length)
                 .ToList();
 
+            RecordMap(source, destination);
             foreach (var ctor in candidates)
             {
                 var args = new List<string>();
                 var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var chosenPaths = new List<KeyValuePair<IParameterSymbol, List<ISymbol>>>();
                 var ok = true;
                 foreach (var p in ctor.Parameters)
                 {
@@ -412,8 +424,10 @@ namespace ConventionMapper.SourceGenerator
                     }
                     args.Add(Escape(p.Name) + ": " + value);
                     used.Add(p.Name);
+                    chosenPaths.Add(new KeyValuePair<IParameterSymbol, List<ISymbol>>(p, path!));
                 }
                 if (!ok) continue;
+                foreach (var pair in chosenPaths) RecordFlow(source, destination, pair.Key.Name + " (constructor)", pair.Key, pair.Value, "constructor parameter");
                 arguments = args;
                 consumed = used;
                 return ctor;
@@ -497,6 +511,7 @@ namespace ConventionMapper.SourceGenerator
             }
             if (access.MayBeNull && !AcceptsNull(destinationType))
                 Report(Diagnostics.NullableToNonNullable, sourceName, Short(owner) + "." + destinationName);
+            RecordFlow(source, owner, destinationName, destinationMember, path, null);
             return value;
         }
 
@@ -894,6 +909,11 @@ namespace ConventionMapper.SourceGenerator
                 if (!ok) continue;
                 chosen = ctor;
                 arguments = args;
+                foreach (var p in ctor.Parameters)
+                {
+                    var used = config.Explicit.TryGetValue(p.Name, out var explicitUsed) ? _resolver.FindExplicitPath(source, explicitUsed) : _resolver.FindPath(source, p.Name);
+                    if (used != null) RecordFlow(source, destination, p.Name + " (constructor)", p, used, "projection, constructor parameter");
+                }
                 foreach (var p in ctor.Parameters) consumed.Add(p.Name);
                 break;
             }
@@ -903,9 +923,11 @@ namespace ConventionMapper.SourceGenerator
                 return null;
             }
 
+            RecordMap(source, destination);
             var assignments = new List<string>();
             foreach (var member in GetWritableMembers(destination, false))
             {
+                if (config.Ignored.Contains(member.Name)) RecordIgnored(source, destination, member);
                 if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
                 var value = ProjectionMember(source, src, member, destination, config, depth, stack);
                 if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
@@ -949,6 +971,7 @@ namespace ConventionMapper.SourceGenerator
             var destinationType = MemberResolver.TypeOf(destinationMember);
             var value = ProjectionValue(valueType, destinationType, ProjectionPath(src, path), depth, stack);
             if (value == null) Report(Diagnostics.IncompatibleTypes, sourceName, Short(valueType), Short(owner) + "." + name, Short(destinationType), name);
+            else RecordFlow(source, owner, name, destinationMember, path, "projection");
             return value;
         }
 
@@ -1136,6 +1159,87 @@ namespace ConventionMapper.SourceGenerator
 
         private static bool HasFlags(INamedTypeSymbol type) =>
             type.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "System.FlagsAttribute");
+
+        // ================================================================== data-flow report
+
+        private SortedDictionary<string, string> RecordMap(ITypeSymbol source, ITypeSymbol destination)
+        {
+            var key = "`" + Short(source) + "` → `" + Short(destination) + "`";
+            if (!_flows.TryGetValue(key, out var rows))
+            {
+                rows = new SortedDictionary<string, string>(StringComparer.Ordinal);
+                _flows[key] = rows;
+            }
+            foreach (var member in _resolver.GetReadableMembers(source))
+                if (MemberResolver.IsSensitive(member)) SensitiveTargets(member);
+            return rows;
+        }
+
+        private void RecordIgnored(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
+            RecordMap(source, destination)[member.Name] =
+                "| " + DestinationCell(member.Name, member) + " | — | ignored |";
+
+        private void RecordFlow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, List<ISymbol> path, string? note)
+        {
+            var notes = new List<string>();
+            if (note != null) notes.Add(note);
+            if (path.Count > 1) notes.Add("flattened");
+            foreach (var member in path.Where(MemberResolver.IsSensitive))
+            {
+                notes.Add("sensitive");
+                SensitiveTargets(member).Add(Short(destination) + "." + destinationName.Replace(" (constructor)", string.Empty));
+            }
+            var description = "`" + string.Join(".", path.Select(m => m is IMethodSymbol ? m.Name + "()" : m.Name)) + "`";
+            RecordMap(source, destination)[destinationName] =
+                "| " + DestinationCell(destinationName, destinationSymbol) + " | " + description + " | " + string.Join(", ", notes) + " |";
+        }
+
+        private static string DestinationCell(string name, ISymbol symbol) => MemberResolver.IsSensitive(symbol) ? name + " (sensitive)" : name;
+
+        private SortedSet<string> SensitiveTargets(ISymbol member)
+        {
+            var key = (member.ContainingType != null ? Short(member.ContainingType) + "." : string.Empty) + member.Name;
+            if (!_sensitive.TryGetValue(key, out var targets))
+            {
+                targets = new SortedSet<string>(StringComparer.Ordinal);
+                _sensitive[key] = targets;
+            }
+            return targets;
+        }
+
+        /// <summary>The Markdown section for this mapper class (combined per assembly into ConventionMapper.Generated.DataFlowReport).</summary>
+        private string? BuildReport()
+        {
+            if (_flows.Count == 0) return null;
+            var sb = new StringBuilder();
+            sb.Append("## `").Append(_mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)).AppendLine("`").AppendLine();
+            if (_sensitive.Count > 0)
+            {
+                sb.AppendLine("Sensitive members:").AppendLine();
+                sb.AppendLine("| Member | Copied to |");
+                sb.AppendLine("| --- | --- |");
+                foreach (var pair in _sensitive)
+                {
+                    var targets = pair.Value.Count == 0 ? "not copied anywhere" : string.Join(", ", pair.Value.Select(t => "`" + t + "` (protected)"));
+                    sb.Append("| `").Append(pair.Key).Append("` | ").Append(targets).AppendLine(" |");
+                }
+                sb.AppendLine();
+            }
+            foreach (var map in _flows)
+            {
+                sb.Append("### ").AppendLine(map.Key).AppendLine();
+                if (map.Value.Count == 0)
+                {
+                    sb.AppendLine("Converted as a whole (no member-by-member flows).").AppendLine();
+                    continue;
+                }
+                sb.AppendLine("| Destination | Source | Notes |");
+                sb.AppendLine("| --- | --- | --- |");
+                foreach (var row in map.Value.Values) sb.AppendLine(row);
+                sb.AppendLine();
+            }
+            return sb.ToString();
+        }
 
         // ================================================================== small utilities
 
