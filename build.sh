@@ -2,7 +2,7 @@
 # Usage: ./build.sh [version]        e.g. ./build.sh 1.0.0
 # Restores, builds, tests and packs ConventionMapper and ConventionMapper.SourceGenerator into ./artifacts
 set -euo pipefail
-VERSION="${1:-1.7.0}"
+VERSION="${1:-1.7.1}"
 cd "$(dirname "$0")"
 
 dotnet restore ConventionMapper.sln

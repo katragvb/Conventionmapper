@@ -24,4 +24,4 @@ To make unmapped members fail the build:
 dotnet_diagnostic.CM1001.severity = error
 ```
 
-The build-time generator (`ConventionMapper.SourceGenerator`) has its own diagnostics, CM0001 to CM0013; see [source-generator.md](source-generator.md).
+The build-time generator (`ConventionMapper.SourceGenerator`) has its own diagnostics, CM0001 to CM0014; see [source-generator.md](source-generator.md).

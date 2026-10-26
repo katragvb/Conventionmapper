@@ -236,6 +236,48 @@ public class Dest { public int Id { get; set; } }
         }
 
         [Fact]
+        public void MapMember_path_matching_a_source_member_and_a_parameter_is_an_error()
+        {
+            // Regression: "CreateUser" used to bind to the parameter "createUser" instead of the source member.
+            var result = Generate(@"
+using ConventionMapper;
+public class Row { public int CreateUser { get; set; } }
+public class Data { public int CreateUserId { get; set; } public string CreateUser { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    [MapExplicit]
+    [MapMember(""CreateUser"", ""CreateUserId"")]
+    public static partial Data Map(Row row, string createUser);
+}");
+
+            var error = Assert.Single(result.Generator, d => d.Id == "CM0014");
+            Assert.Contains("'Row.CreateUser'", error.GetMessage());
+            Assert.Contains("'createUser'", error.GetMessage());
+            Assert.DoesNotContain("int.Parse(createUser)", result.Source);
+        }
+
+        [Fact]
+        public void MapMember_path_through_a_parameter_still_works_when_unambiguous()
+        {
+            var result = Generate(@"
+using ConventionMapper;
+public class User { public string Name { get; set; } = """"; }
+public class Row { public int CreateUser { get; set; } }
+public class Data { public int CreateUserId { get; set; } public string CreateUserName { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""CreateUser"", ""CreateUserId"")]
+    [MapMember(""author.Name"", ""CreateUserName"")]
+    public static partial Data Map(Row row, User author);
+}");
+
+            Assert.Empty(result.Generator.Where(d => d.Severity >= DiagnosticSeverity.Warning));
+            Assert.Empty(result.CompileErrors);
+            Assert.Contains("CreateUserId = row.CreateUser", result.Source);
+            Assert.Contains("author.Name", result.Source);
+        }
+
+        [Fact]
         public void Explicit_mode_needs_no_ignores_and_checks_listed_names()
         {
             var result = Generate(Models + @"

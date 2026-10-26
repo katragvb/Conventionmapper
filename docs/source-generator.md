@@ -157,7 +157,7 @@ public static partial ReferralGap ToReferralGap(this Referral referral, int subm
 var gap = referral.ToReferralGap(submissionNumber, policy);
 ```
 
-The whole object is built in one place, and a caller that forgets a value gets a compile error instead of a silent default. A parameter that matches no destination member is error CM0011. Update methods take extra parameters after the target: `void Update(Dto source, Entity target, DateTime modifiedAt)`. Methods with extra parameters are not reused as conversions for nested members.
+The whole object is built in one place, and a caller that forgets a value gets a compile error instead of a silent default. A parameter takes priority over a source member with the same name, since the caller supplies it on purpose. In a `[MapMember]` path, though, a name that matches both a source member and a parameter (names are case-insensitive, so `"CreateUser"` matches `createUser`) is error CM0014; rename the parameter. A parameter that matches no destination member is error CM0011. Update methods take extra parameters after the target: `void Update(Dto source, Entity target, DateTime modifiedAt)`. Methods with extra parameters are not reused as conversions for nested members.
 
 ### Explicit mode
 
@@ -192,6 +192,7 @@ Listed members still need a source (CM0001), and a listed name that does not exi
 | CM0011 | Error | An extra parameter of a mapping method does not match any destination member. |
 | CM0012 | Warning | `[MapNullSubstitute]` on a member whose source can never be null. |
 | CM0013 | Error | The `[MapNullSubstitute]` value is not a constant that converts to the member type. |
+| CM0014 | Error | A `[MapMember]` source path matches both a source member and a method parameter. |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.
 
