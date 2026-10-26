@@ -225,6 +225,55 @@ public enum B { One, Two }
             Assert.Contains(result.Generator, d => d.Id == "CM0006");
         }
 
+        [Fact]
+        public void Unused_extra_parameter_is_an_error()
+        {
+            var result = Generate(Models + @"
+public class Dest { public int Id { get; set; } }
+[GeneratedMapper] public static partial class M { public static partial Dest Map(Source s, int submissionNumber); }");
+
+            Assert.Contains(result.Generator, d => d.Id == "CM0011" && d.GetMessage().Contains("submissionNumber"));
+        }
+
+        [Fact]
+        public void Explicit_mode_needs_no_ignores_and_checks_listed_names()
+        {
+            var result = Generate(Models + @"
+public class Dest { public int Id { get; set; } public string Unmatched { get; set; } = """"; }
+[GeneratedMapper] public static partial class M { [MapExplicit(""Id"", ""Missing"")] public static partial Dest Map(Source s); }");
+
+            Assert.DoesNotContain(result.Generator, d => d.Id == "CM0001");
+            Assert.Contains(result.Generator, d => d.Id == "CM0008" && d.GetMessage().Contains("Missing"));
+            Assert.Empty(result.CompileErrors);
+        }
+
+        [Fact]
+        public void Explicit_mode_reports_listed_members_without_a_source()
+        {
+            var result = Generate(Models + @"
+public class Dest { public int Id { get; set; } public string Unmatched { get; set; } = """"; }
+[GeneratedMapper] public static partial class M { [MapExplicit(""Unmatched"")] public static partial Dest Map(Source s); }");
+
+            Assert.Contains(result.Generator, d => d.Id == "CM0001" && d.GetMessage().Contains("Unmatched"));
+        }
+
+        [Fact]
+        public void Null_substitute_problems_are_reported()
+        {
+            var result = Generate(Models + @"
+public class Dest { public int Id { get; set; } public string Name { get; set; } = """"; public int Score { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapNullSubstitute(""Id"", 0)]
+    [MapNullSubstitute(""Score"", ""zero"")]
+    public static partial Dest Map(Source s);
+}");
+
+            Assert.Contains(result.Generator, d => d.Id == "CM0012" && d.GetMessage().Contains("'Id'"));
+            Assert.Contains(result.Generator, d => d.Id == "CM0013" && d.GetMessage().Contains("'Score'"));
+            Assert.Empty(result.CompileErrors);
+        }
+
         // ------------------------------------------------------------ analyzer for the runtime API
 
         private static async Task<ImmutableArray<Diagnostic>> Analyze(string code)

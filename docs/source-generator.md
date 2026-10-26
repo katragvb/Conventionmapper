@@ -142,8 +142,38 @@ public static partial class OrderMapper
 ```csharp
 [MapMember("Customer.Email", "ContactEmail")]   // source path -> destination member (or constructor parameter)
 [MapIgnore("InternalNotes")]                    // leave a destination member out
+[MapNullSubstitute("Status", "")]               // value used when the source is null
 public static partial OrderDto ToDto(Order order);
 ```
+
+### Values from the caller (extra parameters)
+
+When some destination members come from the caller rather than the source object, add them as parameters. A parameter sets the destination member (or constructor parameter) with the same name, and a `[MapMember]` path can start at a parameter:
+
+```csharp
+[MapMember("policy.Number", "PolicyNumber")]
+public static partial ReferralGap ToReferralGap(this Referral referral, int submissionNumber, Policy? policy);
+
+var gap = referral.ToReferralGap(submissionNumber, policy);
+```
+
+The whole object is built in one place, and a caller that forgets a value gets a compile error instead of a silent default. A parameter that matches no destination member is error CM0011. Update methods take extra parameters after the target: `void Update(Dto source, Entity target, DateTime modifiedAt)`. Methods with extra parameters are not reused as conversions for nested members.
+
+### Explicit mode
+
+By default every destination member with a matching source member is copied, so a column added later to both types is copied without anyone noticing. `[MapExplicit]` turns this around: only the members you name are set, and every other member keeps its default value.
+
+```csharp
+[MapExplicit("Id", "Name", "Status")]          // copied by name
+[MapMember("Customer.Email", "ContactEmail")]  // MapMember entries are included
+public static partial OrderRow ToRow(Order order, DateTime createdAt);  // so are parameters
+```
+
+Listed members still need a source (CM0001), and a listed name that does not exist is CM0008, so a rename doesn't silently drop a member. No `[MapIgnore]` lists are needed. On the mapper class, `[MapExplicit]` applies to every method; a method can list more names with its own `[MapExplicit(...)]`. Nested objects mapped through generated helpers still use the conventions; declare a mapping method with `[MapExplicit]` for a nested pair to make it explicit too.
+
+### Null substitutes
+
+`[MapNullSubstitute("Status", "")]` writes `source.Status ?? ""`, and in a projection `COALESCE(Status, '')`. The value must be a constant (string, number, `bool`, `char` or enum) that converts implicitly to the member type. A substitute for a source that can never be null is warning CM0012; a constant of the wrong type is error CM0013.
 
 ## Diagnostics
 
@@ -159,6 +189,9 @@ public static partial OrderDto ToDto(Order order);
 | CM0009 | Error | A `[Sensitive]` source member would be copied into a destination member that is not `[Sensitive]`. Add `[MapIgnore]`, or mark the destination `[Sensitive]`. |
 | CM0008 | Warning | `[MapMember]` / `[MapIgnore]` names a member that does not exist. |
 | CM0010 | Warning | A projection reaches a type that contains itself; the recursive member is left null. |
+| CM0011 | Error | An extra parameter of a mapping method does not match any destination member. |
+| CM0012 | Warning | `[MapNullSubstitute]` on a member whose source can never be null. |
+| CM0013 | Error | The `[MapNullSubstitute]` value is not a constant that converts to the member type. |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.
 

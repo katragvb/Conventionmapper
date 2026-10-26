@@ -18,6 +18,8 @@ namespace ConventionMapper.SourceGenerator
         public const string GeneratedMapperAttributeName = "ConventionMapper.GeneratedMapperAttribute";
         public const string MapMemberAttributeName = "ConventionMapper.MapMemberAttribute";
         public const string MapIgnoreAttributeName = "ConventionMapper.MapIgnoreAttribute";
+        public const string MapExplicitAttributeName = "ConventionMapper.MapExplicitAttribute";
+        public const string MapNullSubstituteAttributeName = "ConventionMapper.MapNullSubstituteAttribute";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
@@ -107,6 +109,38 @@ namespace ConventionMapper
         }
 
         public string Destination { get; }
+    }
+
+    /// <summary>
+    /// Explicit mode: only the destination members named here, in [MapMember] or by an extra method parameter are set;
+    /// every other member keeps its default value, so a member added later is never copied silently.
+    /// On a class, applies to every mapping method in it.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class | global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapExplicitAttribute : global::System.Attribute
+    {
+        public MapExplicitAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
+    }
+
+    /// <summary>The value a destination member (or constructor parameter) gets when its source is null: [MapNullSubstitute(""Status"", """")].</summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapNullSubstituteAttribute : global::System.Attribute
+    {
+        public MapNullSubstituteAttribute(string destination, object value)
+        {
+            Destination = destination;
+            Value = value;
+        }
+
+        public string Destination { get; }
+        public object Value { get; }
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>

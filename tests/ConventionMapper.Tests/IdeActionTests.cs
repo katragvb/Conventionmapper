@@ -53,7 +53,7 @@ using ConventionMapper;
 namespace Shop
 {
     public class Customer { public string Name { get; set; } = """"; }
-    public sealed class Order { public int Id { get; set; } public Customer Customer { get; set; } = new Customer(); public string Secret { get; set; } = """"; public int Age { get; set; } }
+    public sealed class Order { public int Id { get; set; } public Customer Customer { get; set; } = new Customer(); public string Secret { get; set; } = """"; public int Age { get; set; } public string? Note { get; set; } }
     public class OrderDto { public int Id { get; set; } public string Buyer { get; set; } = """"; public string Secret { get; set; } = """"; public int Age { get; set; } public string Note { get; set; } = """"; }
 ";
 
@@ -69,7 +69,7 @@ namespace Shop
         {
             CreateMap<Order, OrderDto>()
                 .ForMember(d => d.Secret, o => o.Ignore())
-                .ForMember(d => d.Note, o => o.Ignore())
+                .ForMember(d => d.Note, o => o.NullSubstitute(""n/a""))
                 .ForMember(d => d.Buyer, o => o.MapFrom(s => s.Customer.Name))
                 .ForMember(d => d.Age, o => o.Condition(s => s.Age > 0));
         }
@@ -92,6 +92,7 @@ namespace Shop
             Assert.Contains("public static partial class OrderMapper", mapper);
             Assert.Contains("[MapIgnore(\"Secret\")]", mapper);
             Assert.Contains("[MapMember(\"Customer.Name\", \"Buyer\")]", mapper);
+            Assert.Contains("[MapNullSubstitute(\"Note\", \"n/a\")]", mapper);
             Assert.Contains("public static partial OrderDto ToOrderDto(this Order source);", mapper);
             Assert.Contains(".ForMember(d => d.Age, o => o.Condition(s => s.Age > 0))", mapper); // listed for manual conversion
 

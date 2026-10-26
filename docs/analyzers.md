@@ -12,7 +12,7 @@ CM1001 only checks bare `CreateMap<,>();` statements. Maps configured further in
 
 ## Refactoring: Generate build-time mapper
 
-On any `CreateMap<TSource, TDestination>()` call, the light bulb menu offers **Generate build-time mapper for TSource → TDestination**. It adds a file with the equivalent `[GeneratedMapper]` class for `ConventionMapper.SourceGenerator`, translating `Ignore()`, `MapFrom` member paths and `ReverseMap()`, and listing other options to convert by hand. See [source-generator.md](source-generator.md#moving-a-runtime-map-to-the-generator).
+On any `CreateMap<TSource, TDestination>()` call, the light bulb menu offers **Generate build-time mapper for TSource → TDestination**. It adds a file with the equivalent `[GeneratedMapper]` class for `ConventionMapper.SourceGenerator`, translating `Ignore()`, `MapFrom` member paths, `NullSubstitute` constants and `ReverseMap()`, and listing other options to convert by hand. See [source-generator.md](source-generator.md#moving-a-runtime-map-to-the-generator).
 
 ## Severity
 
@@ -24,4 +24,4 @@ To make unmapped members fail the build:
 dotnet_diagnostic.CM1001.severity = error
 ```
 
-The build-time generator (`ConventionMapper.SourceGenerator`) has its own diagnostics, CM0001 to CM0010; see [source-generator.md](source-generator.md).
+The build-time generator (`ConventionMapper.SourceGenerator`) has its own diagnostics, CM0001 to CM0013; see [source-generator.md](source-generator.md).
