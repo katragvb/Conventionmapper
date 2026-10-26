@@ -2,7 +2,7 @@
 
 ## 1.8.0 (unreleased)
 
-Changes from migrating a large codebase (GARS) to the source generator.
+Changes from migrating a large codebase to the source generator.
 
 **Upgrading:** projects with `TreatWarningsAsErrors` may see new warnings fail the build: mark intended conversion methods `[MapConversion]` (CM0017), allow intended parsing with `[MapAllowParse]` (CM0016), and re-record data-flow report snapshots (new format). New ambiguity errors (CM0015) point at bindings that were guesses before.
 
