@@ -37,7 +37,7 @@ namespace I
         {
             var result = GeneratorHarness.Generate(Code);
             Assert.Empty(result.CompileErrors);
-            Assert.Contains("&& __result.Tags is { } __d) { foreach (var item in ", result.Source);
+            Assert.Matches(@"&& __result\.Tags is \{ \} (__v\d+)\) \{ foreach \(var item in __v\d+\) \1\.Add\(item\); \}", result.Source);
             Assert.Contains("public static global::System.Linq.Expressions.Expression<global::System.Func<global::I.Order, global::I.OrderDto>> ProjectExpression =>", result.Source);
             Assert.Contains("| Tags | `Tags` | added to the existing collection |", result.Report);
         }
