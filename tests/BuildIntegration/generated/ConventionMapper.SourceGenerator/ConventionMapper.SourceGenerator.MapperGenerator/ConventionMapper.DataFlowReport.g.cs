@@ -15,17 +15,13 @@ Generated at build time by ConventionMapper.SourceGenerator: where every destina
 
 ## `BuildIntegration.OrderMapper`
 
-Review first:
-
-- `OrderDto.Id` (key) is written from `Id`
-
 ### ToDto
 
 #### `ToDto(Order)` → `OrderDto`
 
 | Destination | Source | Notes |
 | --- | --- | --- |
-| Id | `Id` | ⚠ key |
+| Id | `Id` |  |
 | Title | `Name` |  |
 
 ";
@@ -38,17 +34,13 @@ Review first:
 
 ## `BuildIntegration.OrderMapper`
 
-Review first:
-
-- `OrderDto.Id` (key) is written from `Id`
-
 ### ToDto
 
 #### `ToDto(Order)` → `OrderDto`
 
 | Destination | Source | Notes |
 | --- | --- | --- |
-| Id | `Id` | ⚠ key |
+| Id | `Id` |  |
 | Title | `Name` |  |
 
 ",

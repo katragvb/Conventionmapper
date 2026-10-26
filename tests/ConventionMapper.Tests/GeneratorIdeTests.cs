@@ -225,6 +225,23 @@ namespace Shop
         }
 
         [Fact]
+        public async Task The_new_overload_names_its_parent_when_the_parent_is_overloaded()
+        {
+            var mapper = AssignModels.Replace("public static partial OrderDto ToDto(this Order order);",
+                "public static partial OrderDto ToDto(this Order order);\n        [MapInherit(nameof(ToDto), typeof(Order))] public static partial OrderDto ToDto(this Order order, int priority);");
+            var project = CreateProject(("Mapper.cs", mapper), ("Use.cs", AssignUse.Replace("            dto.Priority = 5;\n", "")));
+            var (_, output) = await RunGenerator(project);
+            var diagnostic = (await output.WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new AssignmentsAfterMapAnalyzer())).GetAnalyzerDiagnosticsAsync()).Single();
+
+            var solution = await Apply(Assert.Single(await Fixes(new AssignmentsToParametersCodeFixProvider(), project.Documents.Single(d => d.Name == "Use.cs"), diagnostic)));
+
+            Assert.Contains("[MapInherit(nameof(ToDto), typeof(Order))]\n        public static partial OrderDto ToDto(this Order order, string? note);", (await Text(solution, "Mapper.cs")).Replace("\r", ""));
+            var (diagnostics, built) = await RunGenerator(solution.Projects.Single());
+            Assert.DoesNotContain(diagnostics, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Empty(built.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+        }
+
+        [Fact]
         public async Task Assignments_that_read_the_new_object_are_not_reported()
         {
             var project = CreateProject(("Mapper.cs", AssignModels), ("Use.cs", AssignUse.Replace("dto.Note = note;", "dto.Note = dto.Id.ToString();").Replace("dto.Priority = 5;", "")));

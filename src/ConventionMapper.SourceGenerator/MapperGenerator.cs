@@ -23,11 +23,12 @@ namespace ConventionMapper.SourceGenerator
         public const string MapAllowParseAttributeName = "ConventionMapper.MapAllowParseAttribute";
         public const string MapConversionAttributeName = "ConventionMapper.MapConversionAttribute";
         public const string MapInheritAttributeName = "ConventionMapper.MapInheritAttribute";
+        public const string MapReviewedAttributeName = "ConventionMapper.MapReviewedAttribute";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             context.RegisterPostInitializationOutput(static ctx =>
-                ctx.AddSource("ConventionMapper.Attributes.g.cs", SourceText.From(AttributeSource, Encoding.UTF8)));
+                ctx.AddSource("ConventionMapper.Attributes.g.cs", Text(AttributeSource)));
 
             var mappers = context.SyntaxProvider.ForAttributeWithMetadataName(
                 GeneratedMapperAttributeName,
@@ -43,7 +44,7 @@ namespace ConventionMapper.SourceGenerator
             {
                 var result = pair.Left;
                 foreach (var diagnostic in result.Diagnostics) spc.ReportDiagnostic(diagnostic);
-                if (result.Source != null) spc.AddSource(result.HintName, SourceText.From(ApplyDocs(result.Source, pair.Right), Encoding.UTF8));
+                if (result.Source != null) spc.AddSource(result.HintName, Text(ApplyDocs(result.Source, pair.Right)));
             });
 
             // One data-flow report per assembly, with a section per mapper class.
@@ -59,8 +60,34 @@ namespace ConventionMapper.SourceGenerator
             {
                 var parts = pair.Left.Where(s => s != null).Select(s => s!).OrderBy(s => s.Mapper, StringComparer.Ordinal).ToList();
                 if (parts.Count == 0) return;
-                spc.AddSource("ConventionMapper.DataFlowReport.g.cs", SourceText.From(DataFlowReportSource.Build(parts, pair.Right), Encoding.UTF8));
+                spc.AddSource("ConventionMapper.DataFlowReport.g.cs", Text(DataFlowReportSource.Build(parts, pair.Right)));
             });
+
+            // CM0024: the IDE keeps an old generator loaded after a package upgrade. The package's props record the version
+            // the project references; a different running version means the generated code is stale.
+            var expectedVersion = context.AnalyzerConfigOptionsProvider.Select(static (options, _) =>
+                options.GlobalOptions.TryGetValue("build_property.ConventionMapperSourceGeneratorVersion", out var value) ? value?.Trim() ?? string.Empty : string.Empty);
+            context.RegisterSourceOutput(expectedVersion, static (spc, expected) =>
+            {
+                // Only real versions (the props template in the repository carries a placeholder).
+                if (expected.Length == 0 || !char.IsDigit(expected[0])) return;
+                var running = RunningVersion();
+                if (running.Length > 0 && !string.Equals(running, expected, StringComparison.OrdinalIgnoreCase))
+                    spc.ReportDiagnostic(Diagnostic.Create(Diagnostics.StaleGenerator, Location.None, running, expected));
+            });
+        }
+
+        /// <summary>Generated files always use "\n" line endings, whatever the line endings of this generator's own source were.</summary>
+        private static SourceText Text(string source) => SourceText.From(source.Replace("\r\n", "\n").Replace('\r', '\n'), Encoding.UTF8);
+
+        /// <summary>This generator's package version ("1.9.0"), from its informational version without build metadata.</summary>
+        internal static string RunningVersion()
+        {
+            var attribute = (System.Reflection.AssemblyInformationalVersionAttribute?)Attribute.GetCustomAttribute(
+                typeof(MapperGenerator).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+            var version = attribute?.InformationalVersion ?? string.Empty;
+            var plus = version.IndexOf('+');
+            return plus >= 0 ? version.Substring(0, plus) : version;
         }
 
         /// <summary>Turns the emitter's doc markers into "///" lines, or removes them.</summary>
@@ -202,20 +229,39 @@ namespace ConventionMapper
     }
 
     /// <summary>
-    /// Reuses the configuration ([MapMember], [MapIgnore], [MapExplicit], [MapNullSubstitute], [MapAllowParse]) of another
-    /// mapping method of this class with the same source and destination types, for example an overload with extra parameters:
-    /// <c>[MapInherit(nameof(ToDto))]</c>. Attributes on this method are added to (and win over) the inherited ones.
+    /// Reuses the configuration ([MapMember], [MapIgnore], [MapExplicit], [MapNullSubstitute], [MapAllowParse], [MapReviewed])
+    /// of another mapping method of this class with the same source and destination types, for example an overload with extra
+    /// parameters: <c>[MapInherit(nameof(ToDto))]</c>. When several overloads qualify, name the one to use by its parameter
+    /// types: <c>[MapInherit(nameof(ToDto), typeof(Order))]</c>. Attributes on this method are added to (and win over) the inherited ones.
     /// </summary>
     [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
     [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
     internal sealed class MapInheritAttribute : global::System.Attribute
     {
-        public MapInheritAttribute(string method)
+        public MapInheritAttribute(string method, params global::System.Type[] parameterTypes)
         {
             Method = method;
+            ParameterTypes = parameterTypes;
         }
 
         public string Method { get; }
+        public global::System.Type[] ParameterTypes { get; }
+    }
+
+    /// <summary>
+    /// Marks key members (Id, foreign keys) whose writes in this method, or in every method of the class, have been reviewed,
+    /// so they leave the ""Review first"" list of the data-flow report: <c>[MapReviewed(nameof(Policy.PolicyId))]</c>.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class | global::System.AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapReviewedAttribute : global::System.Attribute
+    {
+        public MapReviewedAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>

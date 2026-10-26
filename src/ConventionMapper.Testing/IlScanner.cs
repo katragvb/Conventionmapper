@@ -26,15 +26,57 @@ namespace ConventionMapper.Testing
         public static HashSet<string> CalledMethods(Assembly assembly, Type? excluded = null)
         {
             var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var method in Methods(assembly, excluded))
+                foreach (var reference in References(method))
+                    result.Add(MapperAssert.Key(reference.Target));
+            return result;
+        }
+
+        /// <summary>
+        /// Keys of the methods that a MapperAssert.WritesExactly / UpdatesExactly check runs: method groups passed to it and
+        /// methods called by lambdas created in a method that calls it.
+        /// </summary>
+        public static HashSet<string> VerifiedMethods(Assembly assembly, Type? excluded = null)
+        {
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var method in Methods(assembly, excluded))
+            {
+                var references = References(method);
+                if (!references.Any(r => r.Target.DeclaringType == typeof(MapperAssert) &&
+                                         (r.Target.Name == nameof(MapperAssert.WritesExactly) || r.Target.Name == nameof(MapperAssert.UpdatesExactly))))
+                    continue;
+                foreach (var delegateTarget in references.Where(r => r.IsMethodPointer).Select(r => r.Target))
+                {
+                    result.Add(MapperAssert.Key(delegateTarget)); // a method group: WritesExactly(Mappings.ToDto, ...)
+                    foreach (var call in References(delegateTarget)) result.Add(MapperAssert.Key(call.Target)); // a lambda's body
+                }
+            }
+            return result;
+        }
+
+        private static IEnumerable<MethodBase> Methods(Assembly assembly, Type? excluded)
+        {
+            const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
             foreach (var type in LoadableTypes(assembly))
             {
                 if (excluded != null && IsSelfOrNested(type, excluded)) continue;
-                const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
-                IEnumerable<MethodBase> methods = type.GetMethods(all);
-                methods = methods.Concat(type.GetConstructors(all));
-                foreach (var method in methods) Scan(method, result);
+                foreach (var method in type.GetMethods(all)) yield return method;
+                foreach (var ctor in type.GetConstructors(all)) yield return ctor;
             }
-            return result;
+        }
+
+        internal readonly struct Reference
+        {
+            public Reference(MethodBase target, bool isMethodPointer)
+            {
+                Target = target;
+                IsMethodPointer = isMethodPointer;
+            }
+
+            public MethodBase Target { get; }
+
+            /// <summary>ldftn / ldvirtftn: the method becomes a delegate (a lambda or a method group).</summary>
+            public bool IsMethodPointer { get; }
         }
 
         private static bool IsSelfOrNested(Type type, Type container)
@@ -56,8 +98,9 @@ namespace ConventionMapper.Testing
             }
         }
 
-        private static void Scan(MethodBase method, HashSet<string> result)
+        private static List<Reference> References(MethodBase method)
         {
+            var result = new List<Reference>();
             byte[]? il;
             try
             {
@@ -65,9 +108,9 @@ namespace ConventionMapper.Testing
             }
             catch (Exception)
             {
-                return;
+                return result;
             }
-            if (il == null) return;
+            if (il == null) return result;
 
             var module = method.Module;
             var typeArgs = method.DeclaringType != null && method.DeclaringType.IsGenericType ? method.DeclaringType.GetGenericArguments() : null;
@@ -79,11 +122,11 @@ namespace ConventionMapper.Testing
                 var b = il[i++];
                 if (b == 0xFE)
                 {
-                    if (i >= il.Length || !TwoByte.TryGetValue(il[i++], out code)) return;
+                    if (i >= il.Length || !TwoByte.TryGetValue(il[i++], out code)) return result;
                 }
                 else if (!OneByte.TryGetValue(b, out code))
                 {
-                    return; // unknown opcode: stop rather than misread the rest
+                    return result; // unknown opcode: stop rather than misread the rest
                 }
 
                 switch (code.OperandType)
@@ -94,7 +137,8 @@ namespace ConventionMapper.Testing
                         var token = BitConverter.ToInt32(il, i);
                         try
                         {
-                            if (module.ResolveMember(token, typeArgs, methodArgs) is MethodBase target) result.Add(MapperAssert.Key(target));
+                            if (module.ResolveMember(token, typeArgs, methodArgs) is MethodBase target)
+                                result.Add(new Reference(target, code == OpCodes.Ldftn || code == OpCodes.Ldvirtftn));
                         }
                         catch (Exception)
                         {
@@ -111,6 +155,7 @@ namespace ConventionMapper.Testing
                         break;
                 }
             }
+            return result;
         }
 
         private static int OperandSize(OperandType type)

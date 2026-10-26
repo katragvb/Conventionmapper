@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.9.0 (unreleased)
+
+Fixes from adopting 1.8.0 in a large codebase.
+
+**Upgrading:** `[MapInherit]` naming a method with several matching overloads is now error CM0019 (1.8.0 silently took the one with the fewest parameters); add the parameter types: `[MapInherit(nameof(ToDto), typeof(Order))]`. Re-record data-flow snapshots: plain `Id` / `…Id` names are no longer flagged as keys.
+
+### Source generator
+- **"Review first" lists only real keys.** A member is a key when it is marked `[Key]` or `[ForeignKey]`, named by `[PrimaryKey]` or a navigation's `[ForeignKey]`, or, when the destination is an EF Core entity (a `DbSet<T>` on a `DbContext` or an `IEntityTypeConfiguration<T>`, in this assembly or a referenced one, plus the types their navigations reach), a key by EF's conventions (`Id`, `<Type>Id`, `<Navigation>Id`, `<PrincipalType>Id`). Names alone (`ErrorObjectId`, `RecordID`, `ReadByUserId` on a DTO) no longer count.
+- **`[MapReviewed("PolicyId")]`** on a method or the mapper class takes reviewed keys off the list (the row says `key (reviewed)`). It is inherited through `[MapInherit]`; an unknown name is CM0008.
+- **Exact case decides `[MapMember]` sources.** `"CreateUser"` binds to the source member and `"createUser"` to a parameter with that name, so parameters keep natural names. A path starting with the source parameter's name (`"source.CreateUser"`) always means the source. CM0014 remains for paths that match both with neither in exact case.
+- **`[MapInherit(nameof(ToDto), typeof(Order), ...)]`** picks an overload by its parameter types; several matching overloads without them is error CM0019, which suggests the attribute to write.
+- **`WriteSetOf(nameof(ToDto), typeof(Order))`** on every mapper class: the write set by method name and parameter types. A rename is a compile error, a changed signature throws with the current overloads.
+- **CM0024 (warning):** the IDE is still running an older generator after a package upgrade (the cause of confusing errors such as ambiguous calls). Restart the IDE or its C# language server. Works for upgrades from 1.9.0 on.
+- Generated files always use LF line endings (the data-flow report mixed CRLF and LF on Windows).
+- The CM0023 fix names the parent overload by its parameter types when it is overloaded.
+
+### Generated code in the repository
+- CI is also detected from `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILDKITE`, `TEAMCITY_VERSION`, `CIRCLECI`, `BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID` and `HARNESS_BUILD_ID`. Systems that set none of them (Concourse) need `-p:ConventionMapperCheckGeneratedCode=true`.
+- A build that rewrites the generated files says so in the build log, so a CI system that isn't detected is visible.
+
+### ConventionMapper.Testing
+- **`MapperAssert.AllMethodsVerified`**: every create and update method must run inside a `WritesExactly` / `UpdatesExactly` check (projections must be called), so a test that calls a map without asserting no longer counts.
+- **`MapperAssert.WriteSetOf(typeof(Mappings), nameof(Mappings.ToDto), typeof(Order))`**: typed write-set lookup.
+
 ## 1.8.0 (2026-10-26)
 
 Changes from migrating a large codebase to the source generator.

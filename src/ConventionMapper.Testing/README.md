@@ -25,7 +25,10 @@ real behavior with it, without listing members by hand:
 MapperAssert.WritesExactly((LocationData s) => s.ToImportData(), Mappings.WriteSets["ToImportData(LocationData)"]);
 ```
 
-Keys are `"Name(ParameterTypes)"` as in the data-flow report, plus `"Name"` for methods without overloads. Update
+Keys are `"Name(ParameterTypes)"` as in the data-flow report, plus `"Name"` for methods without overloads. To survive
+renames and signature changes, look the write set up by name and parameter types instead:
+`Mappings.WriteSetOf(nameof(Mappings.ToImportData), typeof(LocationData))`, or
+`MapperAssert.WriteSetOf(typeof(Mappings), nameof(Mappings.ToImportData), typeof(LocationData))`. Update
 methods use `MapperAssert.UpdatesExactly((Dto s, Entity t) => s.Update(t), expected)`.
 
 ## Is every mapping method tested?
@@ -38,6 +41,15 @@ public void Every_mapping_method_has_a_test() =>
 
 Fails with the list of generated mapping methods that no code in the test assembly calls (directly, as a method group or
 inside an expression tree).
+
+A call alone doesn't check anything, so there is a stricter version: every create and update method must run inside a
+`WritesExactly` or `UpdatesExactly` check (projections must at least be called).
+
+```csharp
+[Fact]
+public void Every_mapping_method_is_verified() =>
+    MapperAssert.AllMethodsVerified(typeof(Mappings), typeof(MappingTests).Assembly);
+```
 
 ## Sample data
 

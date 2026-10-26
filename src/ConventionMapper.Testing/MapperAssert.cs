@@ -177,6 +177,27 @@ namespace ConventionMapper.Testing
             throw new MapperAssertException("'" + mapperType.Name + "' has no write set '" + method + "'. Known: " + string.Join(", ", sets.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         }
 
+        /// <summary>
+        /// The generated write set of a method by name and parameter types, through the mapper's generated
+        /// <c>WriteSetOf</c>: <c>MapperAssert.WriteSetOf(typeof(Mappings), nameof(Mappings.ToDto), typeof(Order))</c>.
+        /// A renamed method is a compile error (nameof), a changed signature a failure that lists the overloads.
+        /// </summary>
+        public static IReadOnlyList<string> WriteSetOf(Type mapperType, string method, params Type[] parameterTypes)
+        {
+            var accessor = mapperType.GetMethod("WriteSetOf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null,
+                new[] { typeof(string), typeof(Type[]) }, null);
+            if (accessor == null)
+                throw new MapperAssertException("'" + mapperType.FullName + "' has no generated WriteSetOf. Is it a [GeneratedMapper] class built with ConventionMapper.SourceGenerator 1.9 or later?");
+            try
+            {
+                return (IReadOnlyList<string>)accessor.Invoke(null, new object[] { method, parameterTypes })!;
+            }
+            catch (TargetInvocationException e) when (e.InnerException is ArgumentException inner)
+            {
+                throw new MapperAssertException(inner.Message);
+            }
+        }
+
         private static IReadOnlyDictionary<string, IReadOnlyList<string>> WriteSets(Type mapperType)
         {
             var field = mapperType.GetField("WriteSets", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
@@ -195,16 +216,60 @@ namespace ConventionMapper.Testing
         {
             if (mapperType == null) throw new ArgumentNullException(nameof(mapperType));
             if (testAssembly == null) throw new ArgumentNullException(nameof(testAssembly));
-            var names = new HashSet<string>(WriteSets(mapperType).Keys.Select(k => k.IndexOf('(') >= 0 ? k.Substring(0, k.IndexOf('(')) : k), StringComparer.Ordinal);
-            var methods = mapperType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(m => names.Contains(m.Name) && !m.IsSpecialName)
-                .ToList();
+            var methods = MappingMethods(mapperType);
 
             // The mapper's own generated code calls its methods for nested objects; that is not a test.
             var called = IlScanner.CalledMethods(testAssembly, mapperType);
             var missing = methods.Where(m => !called.Contains(Key(m))).Select(Describe).OrderBy(d => d, StringComparer.Ordinal).ToList();
             if (missing.Count > 0)
                 throw new MapperAssertException("Mapping methods of " + mapperType.Name + " that no test in " + testAssembly.GetName().Name + " calls:\n" + string.Join("\n", missing.Select(m => "  " + m)));
+        }
+
+        /// <summary>
+        /// Stricter than <see cref="AllMethodsCovered"/>: every create and update method of <paramref name="mapperType"/> must
+        /// run inside a <see cref="WritesExactly{TSource, TDestination}(Func{TSource, TDestination}, IEnumerable{string}, IEnumerable{string})"/>
+        /// or <see cref="UpdatesExactly"/> check in <paramref name="testAssembly"/>, so a test that only calls a map without
+        /// asserting anything does not count. Projections (which those checks can't run) must be called at least.
+        /// </summary>
+        public static void AllMethodsVerified(Type mapperType, Assembly testAssembly)
+        {
+            if (mapperType == null) throw new ArgumentNullException(nameof(mapperType));
+            if (testAssembly == null) throw new ArgumentNullException(nameof(testAssembly));
+            var methods = MappingMethods(mapperType);
+            var called = IlScanner.CalledMethods(testAssembly, mapperType);
+            var verified = IlScanner.VerifiedMethods(testAssembly, mapperType);
+
+            var missing = new List<string>();
+            foreach (var method in methods)
+            {
+                if (IsProjection(method))
+                {
+                    if (!called.Contains(Key(method))) missing.Add("  " + Describe(method) + " (projection, never called)");
+                }
+                else if (!verified.Contains(Key(method)))
+                {
+                    missing.Add("  " + Describe(method) + (called.Contains(Key(method)) ? " (called, but not in WritesExactly/UpdatesExactly)" : " (never called)"));
+                }
+            }
+            if (missing.Count > 0)
+                throw new MapperAssertException("Mapping methods of " + mapperType.Name + " without a WritesExactly/UpdatesExactly check in " +
+                                                testAssembly.GetName().Name + ":\n" + string.Join("\n", missing.OrderBy(m => m, StringComparer.Ordinal)));
+        }
+
+        private static List<MethodInfo> MappingMethods(Type mapperType)
+        {
+            var names = new HashSet<string>(WriteSets(mapperType).Keys.Select(k => k.IndexOf('(') >= 0 ? k.Substring(0, k.IndexOf('(')) : k), StringComparer.Ordinal);
+            return mapperType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(m => names.Contains(m.Name) && !m.IsSpecialName)
+                .ToList();
+        }
+
+        private static bool IsProjection(MethodInfo method)
+        {
+            var returned = method.ReturnType;
+            if (!returned.IsGenericType) return false;
+            var definition = returned.GetGenericTypeDefinition();
+            return definition == typeof(IQueryable<>) || definition == typeof(System.Linq.Expressions.Expression<>);
         }
 
         internal static string Key(MethodBase method) => method.Module.ModuleVersionId.ToString("N") + ":" + method.MetadataToken.ToString("X8");

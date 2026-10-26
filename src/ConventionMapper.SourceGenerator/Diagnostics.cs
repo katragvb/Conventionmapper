@@ -69,7 +69,7 @@ namespace ConventionMapper.SourceGenerator
 
         public static readonly DiagnosticDescriptor AmbiguousMapMemberSource = new DiagnosticDescriptor(
             "CM0014", "Ambiguous [MapMember] source",
-            "Source path '{0}' for '{1}' matches both the source member '{2}' and the parameter '{3}' (names are case-insensitive). Rename the parameter so the source is unambiguous.",
+            "Source path '{0}' for '{1}' matches both the source member '{2}' and the parameter '{3}' (names are case-insensitive). Write the name in its exact case (\"{3}\" for the parameter), or \"{4}\" for the source member.",
             Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
         public static readonly DiagnosticDescriptor AmbiguousSource = new DiagnosticDescriptor(
@@ -110,6 +110,11 @@ namespace ConventionMapper.SourceGenerator
         public static readonly DiagnosticDescriptor UnknownProvider = new DiagnosticDescriptor(
             "CM0022", "Unknown projection provider",
             "Provider '{0}' is not known; use one of {1}. Projections are checked with the default rules.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor StaleGenerator = new DiagnosticDescriptor(
+            "CM0024", "Out-of-date source generator is running",
+            "ConventionMapper.SourceGenerator {0} is running, but the project references {1}. Restart the IDE (or its C# language server) so it loads the new generator; until then the generated code is from the old version and can cause errors such as ambiguous calls.",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
 
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(

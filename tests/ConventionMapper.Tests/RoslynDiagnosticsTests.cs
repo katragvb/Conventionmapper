@@ -239,9 +239,10 @@ public class Dest { public int Id { get; set; } }
         }
 
         [Fact]
-        public void MapMember_path_matching_a_source_member_and_a_parameter_is_an_error()
+        public void MapMember_path_in_the_source_members_exact_case_binds_to_the_source()
         {
-            // Regression: "CreateUser" used to bind to the parameter "createUser" instead of the source member.
+            // 1.7.x bound "CreateUser" to the parameter "createUser" (int.Parse(createUser)); 1.8.0 made it CM0014.
+            // The exact case decides: "CreateUser" is the source member, and the parameter keeps its natural name.
             var result = Generate(@"
 using ConventionMapper;
 public class Row { public int CreateUser { get; set; } }
@@ -253,10 +254,65 @@ public class Data { public int CreateUserId { get; set; } public string CreateUs
     public static partial Data Map(Row row, string createUser);
 }");
 
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Empty(result.CompileErrors);
+            Assert.Contains("CreateUserId = row.CreateUser", result.Source);
+            Assert.Contains("CreateUser = createUser", result.Source);
+            Assert.DoesNotContain("int.Parse", result.Source);
+        }
+
+        [Fact]
+        public void MapMember_path_in_the_parameters_exact_case_binds_to_the_parameter()
+        {
+            var result = Generate(@"
+using ConventionMapper;
+public class Row { public string CreateUser { get; set; } = """"; }
+public class Data { public string Author { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""createUser"", ""Author"")]
+    public static partial Data Map(Row row, string createUser);
+}");
+
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Contains("Author = createUser", result.Source);
+        }
+
+        [Fact]
+        public void MapMember_path_matching_neither_exactly_is_still_an_error()
+        {
+            var result = Generate(@"
+using ConventionMapper;
+public class Row { public int CreateUser { get; set; } }
+public class Data { public int CreateUserId { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""createuser"", ""CreateUserId"")]
+    public static partial Data Map(Row row, int createUSER);
+}");
+
             var error = Assert.Single(result.Generator, d => d.Id == "CM0014");
             Assert.Contains("'Row.CreateUser'", error.GetMessage());
-            Assert.Contains("'createUser'", error.GetMessage());
-            Assert.DoesNotContain("int.Parse(createUser)", result.Source);
+            Assert.Contains("\"createUSER\" for the parameter", error.GetMessage());
+            Assert.Contains("\"row.createuser\" for the source member", error.GetMessage());
+        }
+
+        [Fact]
+        public void Source_parameter_prefix_always_means_the_source()
+        {
+            var result = Generate(@"
+using ConventionMapper;
+public class Row { public int CreateUser { get; set; } }
+public class Data { public int CreateUserId { get; set; } public int CreateUser { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""source.CreateUser"", ""CreateUserId"")]
+    public static partial Data Map(Row source, int createuser);
+}");
+
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Contains("CreateUserId = source.CreateUser", result.Source);
+            Assert.Contains("CreateUser = createuser", result.Source);
         }
 
         [Fact]
@@ -290,17 +346,20 @@ public class Row { public int CreateUser { get; set; } public string Status { ge
 ";
 
         [Fact]
-        public void Dotted_MapMember_path_matching_a_source_member_and_a_parameter_is_an_error()
+        public void Dotted_MapMember_path_uses_the_exact_case_to_choose()
         {
             var result = Generate(CollisionModels + @"
-public class Data { public string CustomerName { get; set; } = """"; }
+public class Data { public string CustomerName { get; set; } = """"; public string OtherName { get; set; } = """"; }
 [GeneratedMapper] public static partial class M
 {
     [MapMember(""Customer.Name"", ""CustomerName"")]
+    [MapMember(""customer.Name"", ""OtherName"")]
     public static partial Data Map(Row row, Customer customer);
 }");
 
-            Assert.Single(result.Generator, d => d.Id == "CM0014");
+            Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Contains("CustomerName = row.Customer", result.Source);
+            Assert.Contains("OtherName = customer?.Name", result.Source);
         }
 
         [Fact]
@@ -310,8 +369,8 @@ public class Data { public string CustomerName { get; set; } = """"; }
 public record Data(int CreateUserId);
 [GeneratedMapper] public static partial class M
 {
-    [MapMember(""CreateUser"", ""CreateUserId"")]
-    public static partial Data Map(Row row, string createUser);
+    [MapMember(""createuser"", ""CreateUserId"")]
+    public static partial Data Map(Row row, string createUSER);
 }");
 
             Assert.Single(result.Generator, d => d.Id == "CM0014");

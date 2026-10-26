@@ -66,7 +66,7 @@ The conventions never pick silently between two possible sources. Each of these 
 * two flattenings (`BillingAddressCity` from `Billing.AddressCity` or `BillingAddress.City`),
 * a method parameter and a flattened path (`customerName` and `Customer.Name`).
 
-A parameter named exactly like the destination member still wins over a source member with that name, since the caller supplies it on purpose. In `[MapMember]` paths an exact-case match wins.
+A parameter named exactly like the destination member still wins over a source member with that name, since the caller supplies it on purpose.
 
 Conversions that can throw or lose data at runtime (`int.Parse`, `Enum.Parse`, a `checked` narrowing cast such as `long` → `int`) are warning CM0016. When the conversion is intended, say so for that member:
 
@@ -140,7 +140,7 @@ Mark members such as password hashes or tokens `[Sensitive]`. Copying one into a
 
 Each assembly with `[GeneratedMapper]` classes also gets `ConventionMapper.Generated.DataFlowReport` (internal): a Markdown report of every generated map, produced by the build so it always matches the code. For each mapper class it has:
 
-* **Review first**: key-like members (`Id`, `CustomerId`, `[Key]`) written by convention, and parsing or narrowing conversions that are not allowed with `[MapAllowParse]`. Those rows are also marked ⚠.
+* **Review first**: keys written by convention, and parsing or narrowing conversions that are not allowed with `[MapAllowParse]`. Those rows are also marked ⚠. A key is a member marked `[Key]` or `[ForeignKey]`, named by `[PrimaryKey]` or a navigation's `[ForeignKey]`, or, when the destination is an EF Core entity (a `DbSet<T>` or `IEntityTypeConfiguration<T>` in this or a referenced assembly, and the types their navigations reach), a key by EF's conventions: `Id`, `<Type>Id`, `<Navigation>Id`, `<PrincipalType>Id`. A DTO's `Id` or a name like `ErrorObjectId` alone is not a key. Once reviewed, `[MapReviewed("PolicyId")]` on the method (or class) takes a key off the list; its row then says `key (reviewed)`.
 * **Sensitive members**: every place a `[Sensitive]` member is copied to.
 * **Conversion methods**: each one used, and the members it was applied to.
 * A section per mapping method, with overloads under one heading, then the nested type pairs. Each row says where the destination member gets its value: matching name, flattened path, method parameter, conversion method, ignored or not listed.
@@ -167,7 +167,9 @@ Reviewers see attribute changes, not what they do. Keep the generated code in th
 </PropertyGroup>
 ```
 
-Every local build writes ConventionMapper's generated files into `Generated/` (relative to the project; a folder per target framework when the project has several) and removes files for mappers that are gone. CI builds (`ContinuousIntegrationBuild`, `CI=true` or `TF_BUILD`) don't write; they fail with error CM0100 when the committed copy is out of date. Override with `<ConventionMapperCheckGeneratedCode>true|false</ConventionMapperCheckGeneratedCode>`. The folder is not compiled; the compiler keeps using the generator's output.
+Every local build writes ConventionMapper's generated files into `Generated/` (relative to the project; a folder per target framework when the project has several), removes files for mappers that are gone, and says so in the build log. CI builds don't write; they fail with error CM0100 when the committed copy is out of date. The folder is not compiled; the compiler keeps using the generator's output.
+
+> **Make sure your CI checks.** CI is detected from `ContinuousIntegrationBuild=true` or the environment variables `CI`, `TF_BUILD`, `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILDKITE`, `TEAMCITY_VERSION`, `CIRCLECI`, `BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID` and `HARNESS_BUILD_ID`. Other systems (Concourse, for one) set none of these: build there with `-p:ConventionMapperCheckGeneratedCode=true`, or set `CI=true` in the task. Otherwise the build silently rewrites the files instead of failing; the "ConventionMapper updated the generated code" line in the build log shows it happened.
 
 For hover help in the IDE, `<ConventionMapperGeneratedDocs>true</ConventionMapperGeneratedDocs>` adds XML docs to each generated method listing where every member comes from. A doc comment you wrote on the declaration is kept, and the data flow goes into `<remarks>`.
 
@@ -182,6 +184,15 @@ MapperAssert.WritesExactly((LocationData s) => s.ToImportData("GL1", 10m),
 
 // Fails when a mapping method is never called from the tests.
 MapperAssert.AllMethodsCovered(typeof(Mappings), typeof(MappingTests).Assembly);
+
+// Stricter: every create and update method must run inside WritesExactly / UpdatesExactly.
+MapperAssert.AllMethodsVerified(typeof(Mappings), typeof(MappingTests).Assembly);
+```
+
+String keys break when a signature changes. `WriteSetOf` looks a method up by name and parameter types instead: a rename is a compile error, and a changed signature fails with the current overloads.
+
+```csharp
+Mappings.WriteSetOf(nameof(Mappings.ToImportData), typeof(LocationData), typeof(string), typeof(decimal?));
 ```
 
 ## Moving a runtime map to the generator
@@ -230,7 +241,9 @@ public static partial ReferralGap ToReferralGap(this Referral referral, int subm
 var gap = referral.ToReferralGap(submissionNumber, policy);
 ```
 
-The whole object is built in one place, and a caller that forgets a value gets a compile error instead of a silent default. A parameter takes priority over a source member with the same name, since the caller supplies it on purpose. In a `[MapMember]` path, though, a name that matches both a source member and a parameter (names are case-insensitive, so `"CreateUser"` matches `createUser`) is error CM0014; rename the parameter. A parameter that matches no destination member is error CM0011. Update methods take extra parameters after the target: `void Update(Dto source, Entity target, DateTime modifiedAt)`. Methods with extra parameters are not reused as conversions for nested members.
+The whole object is built in one place, and a caller that forgets a value gets a compile error instead of a silent default. A parameter takes priority over a source member with the same name, since the caller supplies it on purpose.
+
+In a `[MapMember]` path, names are case-insensitive, so `"CreateUser"` could mean the source member `CreateUser` or a parameter `createUser`. The exact case decides: `"CreateUser"` is the source member, `"createUser"` the parameter. A path that starts with the source parameter's name, such as `"source.CreateUser"`, always means the source. Only a path that matches both, in neither's exact case, is error CM0014. A parameter that matches no destination member is error CM0011. Update methods take extra parameters after the target: `void Update(Dto source, Entity target, DateTime modifiedAt)`. Methods with extra parameters are not reused as conversions for nested members.
 
 ### Sharing configuration between methods
 
@@ -244,7 +257,14 @@ public static partial ImportData ToImportData(this LocationData source);
 public static partial ImportData ToImportData(this LocationData source, string? glClassCode, decimal? exposure);
 ```
 
-The inherited method must map the same source and destination types (a projection can inherit from a create method); among overloads, the one with the fewest parameters is used. The method's own attributes are added and win, and a parameter overrides an inherited `[MapIgnore]` for its member. A mismatch, an unknown name or a cycle is error CM0019.
+The inherited method must map the same source and destination types (a projection can inherit from a create method). When more than one overload qualifies, name the one to inherit from by its parameter types:
+
+```csharp
+[MapInherit(nameof(ToImportData), typeof(LocationData))]
+public static partial IQueryable<ImportData> Project(IQueryable<LocationData> query);
+```
+
+The method's own attributes are added and win, and a parameter overrides an inherited `[MapIgnore]` for its member. A mismatch, an ambiguous or unknown name, or a cycle is error CM0019.
 
 `nameof` works in every mapping attribute, and keeps member names correct through renames; the CM0020 fix converts existing strings.
 
@@ -291,9 +311,16 @@ Listed members still need a source (CM0001), and a listed name that does not exi
 | CM0021 | Warning | Part of a projection may not translate to SQL or runs on the client. |
 | CM0022 | Warning | Unknown `Provider` in `[GeneratedMapper]`. |
 | CM0023 | Info | Members assigned right after a mapping call can be parameters (with a fix). |
+| CM0024 | Warning | The IDE runs an older generator than the package the project references. Restart the IDE or its C# language server. |
 | CM0100 | Error | The generated code committed with `ConventionMapperEmitGeneratedCode` is out of date (CI builds). |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.
+
+## Troubleshooting
+
+**Errors such as "the call is ambiguous" right after upgrading the package.** The IDE keeps the previous generator loaded, so the generated code is from the old version. Restart Visual Studio or Rider, or in VS Code run *.NET: Restart Language Server*. From 1.9.0 on, warning CM0024 says when this happens. A command-line `dotnet build` always uses the new version.
+
+**CM0100 never fires in CI.** Your CI system isn't detected; see the note under [Generated code in pull requests](#generated-code-in-pull-requests).
 
 ## Source generator or runtime mapper?
 

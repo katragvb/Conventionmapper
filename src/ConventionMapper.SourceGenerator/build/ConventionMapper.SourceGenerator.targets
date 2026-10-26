@@ -4,16 +4,22 @@
 
       <ConventionMapperEmitGeneratedCode>Generated</ConventionMapperEmitGeneratedCode>
 
-    Local builds copy ConventionMapper's generated files into that folder (relative to the project). CI builds
-    (ContinuousIntegrationBuild, CI=true or TF_BUILD) instead fail with CM0100 when the committed copy is out of date.
-    Override with <ConventionMapperCheckGeneratedCode>true|false</ConventionMapperCheckGeneratedCode>.
+    Local builds copy ConventionMapper's generated files into that folder (relative to the project). CI builds instead fail
+    with CM0100 when the committed copy is out of date. CI is detected from ContinuousIntegrationBuild=true or the usual CI
+    environment variables (CI, TF_BUILD, GITHUB_ACTIONS, GITLAB_CI, JENKINS_URL, BUILDKITE, TEAMCITY_VERSION, CIRCLECI,
+    BITBUCKET_BUILD_NUMBER, CODEBUILD_BUILD_ID, HARNESS_BUILD_ID). Systems that set none of these (Concourse, for one)
+    must pass -p:ConventionMapperCheckGeneratedCode=true; set it to false to force writing.
     The folder is excluded from compilation; the compiler still uses the generator's output.
   -->
   <PropertyGroup Condition="'$(ConventionMapperEmitGeneratedCode)' != ''">
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath Condition="'$(CompilerGeneratedFilesOutputPath)' == ''">$(IntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
     <_ConventionMapperGeneratedFolder>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(ConventionMapperEmitGeneratedCode)'))</_ConventionMapperGeneratedFolder>
-    <ConventionMapperCheckGeneratedCode Condition="'$(ConventionMapperCheckGeneratedCode)' == '' and ('$(ContinuousIntegrationBuild)' == 'true' or '$(CI)' == 'true' or '$(TF_BUILD)' == 'True')">true</ConventionMapperCheckGeneratedCode>
+    <_ConventionMapperCiDetected Condition="'$(ContinuousIntegrationBuild)' == 'true' or '$(CI)' == 'true' or '$(CI)' == '1' or '$(TF_BUILD)' == 'True' or
+                                           '$(GITHUB_ACTIONS)' == 'true' or '$(GITLAB_CI)' != '' or '$(JENKINS_URL)' != '' or '$(BUILDKITE)' == 'true' or
+                                           '$(TEAMCITY_VERSION)' != '' or '$(CIRCLECI)' == 'true' or '$(BITBUCKET_BUILD_NUMBER)' != '' or
+                                           '$(CODEBUILD_BUILD_ID)' != '' or '$(HARNESS_BUILD_ID)' != ''">true</_ConventionMapperCiDetected>
+    <ConventionMapperCheckGeneratedCode Condition="'$(ConventionMapperCheckGeneratedCode)' == '' and '$(_ConventionMapperCiDetected)' == 'true'">true</ConventionMapperCheckGeneratedCode>
     <ConventionMapperCheckGeneratedCode Condition="'$(ConventionMapperCheckGeneratedCode)' == ''">false</ConventionMapperCheckGeneratedCode>
   </PropertyGroup>
 
@@ -51,6 +57,7 @@
                 expected[file.Substring(Source.Length).TrimStart('/', '\\')] = File.ReadAllText(file);
 
         var problems = new List<string>();
+        var written = new List<string>();
         foreach (var pair in expected)
         {
             var target = Path.Combine(Destination, pair.Key);
@@ -58,6 +65,7 @@
             if (Check) { problems.Add((File.Exists(target) ? "changed: " : "missing: ") + pair.Key); continue; }
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             File.WriteAllText(target, pair.Value);
+            written.Add(pair.Key);
         }
         if (Directory.Exists(Destination))
         {
@@ -68,9 +76,14 @@
                 // Leave other target frameworks' folders alone in multi-targeted projects.
                 if (relative.IndexOf('/') >= 0 || relative.IndexOf('\\') >= 0) continue;
                 if (Check) problems.Add("stale: " + relative);
-                else File.Delete(file);
+                else { File.Delete(file); written.Add(relative + " (deleted)"); }
             }
         }
+        // Shown at normal verbosity, so a CI system that is not detected still shows that it rewrote the code instead of checking it.
+        if (written.Count > 0)
+            Log.LogMessage(Microsoft.Build.Framework.MessageImportance.High,
+                "ConventionMapper updated the generated code in " + Destination + " (" + string.Join(", ", written) +
+                "): commit it. In CI, set ConventionMapperCheckGeneratedCode=true so out-of-date code fails the build (CM0100) instead.");
         if (problems.Count > 0)
             Log.LogError(null, "CM0100", null, Destination, 0, 0, 0, 0,
                 "The generated mapping code committed in " + Destination + " is out of date (" + string.Join(", ", problems) +

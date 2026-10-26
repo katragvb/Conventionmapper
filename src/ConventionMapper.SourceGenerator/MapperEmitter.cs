@@ -43,6 +43,8 @@ namespace ConventionMapper.SourceGenerator
         private bool _requireMapConversion;
         private string _provider = ProjectionProvider.Default;
         private readonly HashSet<string> _classAllowParse = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _classReviewed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> _currentReviewed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Ordinary static methods marked [MapConversion] (no CM0017 for these).</summary>
         private readonly HashSet<IMethodSymbol> _markedConversions = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -208,6 +210,10 @@ namespace ConventionMapper.SourceGenerator
                 {
                     foreach (var member in StringArguments(attribute)) _classAllowParse.Add(member);
                 }
+                else if (name == MapperGenerator.MapReviewedAttributeName)
+                {
+                    foreach (var member in StringArguments(attribute)) _classReviewed.Add(member);
+                }
             }
         }
 
@@ -267,7 +273,46 @@ namespace ConventionMapper.SourceGenerator
             w.Outdent();
             w.Line("};");
             w.Outdent();
+            EmitWriteSetOf(methods, w);
         }
+
+        /// <summary>
+        /// WriteSetOf(nameof(M), typeof(A), ...): the write set by method name and parameter types, so a renamed method is a
+        /// compile error and a changed signature throws (listing the current overloads) instead of a silently missing key.
+        /// </summary>
+        private void EmitWriteSetOf(List<IMethodSymbol> methods, CodeWriter w)
+        {
+            if (!_mapper.GetMembers("WriteSetOf").IsEmpty) return;
+            var list = "global::System.Collections.Generic.IReadOnlyList<string>";
+            w.Line();
+            w.Line("/// <summary>");
+            w.Line("/// The destination members the generated method <paramref name=\"method\"/> writes. Pass its parameter types when it has overloads:");
+            w.Line("/// <c>WriteSetOf(nameof(ToDto), typeof(Order), typeof(string))</c>. Throws when no generated method matches.");
+            w.Line("/// </summary>");
+            w.Open("internal static " + list + " WriteSetOf(string method, params global::System.Type[] parameterTypes)");
+            w.Line("var candidates = 0;");
+            foreach (var method in methods)
+            {
+                var types = method.Parameters.Select(p => "typeof(" + T(TypeofType(p.Type)) + ")").ToList();
+                w.Open("if (method == " + SymbolDisplay.FormatLiteral(method.Name, true) + ")");
+                w.Line("candidates++;");
+                w.Line("if (parameterTypes.Length == 0 && WriteSets.ContainsKey(method)) return WriteSets[method];");
+                var condition = "parameterTypes.Length == " + types.Count.ToString(CultureInfo.InvariantCulture) +
+                                string.Concat(types.Select((t, i) => " && parameterTypes[" + i.ToString(CultureInfo.InvariantCulture) + "] == " + t));
+                w.Line("if (" + condition + ") return WriteSets[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "];");
+                w.Close();
+            }
+            w.Line("throw new global::System.ArgumentException(candidates == 0");
+            w.Indent();
+            w.Line("? \"No generated mapping method is named '\" + method + \"'.\"");
+            w.Line(": \"No generated overload of '\" + method + \"' has these parameter types. Overloads: \" + string.Join(\", \", global::System.Linq.Enumerable.Where(WriteSets.Keys, k => k.StartsWith(method + \"(\", global::System.StringComparison.Ordinal))), nameof(method));");
+            w.Outdent();
+            w.Close();
+        }
+
+        /// <summary>The runtime type of a parameter, as typeof sees it: no nullable reference annotation.</summary>
+        private static ITypeSymbol TypeofType(ITypeSymbol type) =>
+            type.IsReferenceType ? type.WithNullableAnnotation(NullableAnnotation.NotAnnotated) : type;
 
         /// <summary>CM0017 on every ordinary static method that was used as a conversion without [MapConversion].</summary>
         private void ReportUnmarkedConversions()
@@ -397,7 +442,8 @@ namespace ConventionMapper.SourceGenerator
             {
                 var name = attribute.AttributeClass?.ToDisplayString();
                 int[]? positions;
-                if (name == MapperGenerator.MapExplicitAttributeName || name == MapperGenerator.MapAllowParseAttributeName) positions = null; // all
+                if (name == MapperGenerator.MapExplicitAttributeName || name == MapperGenerator.MapAllowParseAttributeName ||
+                    name == MapperGenerator.MapReviewedAttributeName) positions = null; // all
                 else if (name == MapperGenerator.MapIgnoreAttributeName || name == MapperGenerator.MapNullSubstituteAttributeName) positions = new[] { 0 };
                 else if (name == MapperGenerator.MapMemberAttributeName) positions = new[] { 1 };
                 else continue;
@@ -547,6 +593,7 @@ namespace ConventionMapper.SourceGenerator
             var config = new MemberConfig();
             foreach (var attribute in _mapper.GetAttributes()) ReadExplicit(attribute, config);
             ReadMethodConfig(method, config, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { method });
+            _currentReviewed = config.Reviewed;
             return config;
         }
 
@@ -558,7 +605,7 @@ namespace ConventionMapper.SourceGenerator
             foreach (var attribute in attributes)
             {
                 if (attribute.AttributeClass?.ToDisplayString() != MapperGenerator.MapInheritAttributeName) continue;
-                if (attribute.ConstructorArguments.Length != 1 || !(attribute.ConstructorArguments[0].Value is string inheritedName)) continue;
+                if (attribute.ConstructorArguments.Length < 1 || !(attribute.ConstructorArguments[0].Value is string inheritedName)) continue;
                 var inherited = FindInheritedMethod(method, inheritedName, attribute);
                 if (inherited == null) continue;
                 if (!chain.Add(inherited))
@@ -580,19 +627,48 @@ namespace ConventionMapper.SourceGenerator
                     if (own) config.OwnIgnored.Add(ignored);
                 }
                 else if (name == MapperGenerator.MapMemberAttributeName && args.Length == 2 && args[0].Value is string from && args[1].Value is string to)
-                    config.Explicit[to] = from;
+                {
+                    // "source.CreateUser" (the method's own source parameter name first) always means the source object,
+                    // never a parameter, so parameters can keep natural names.
+                    if (TryStripSourcePrefix(method, from, out var stripped))
+                    {
+                        config.Explicit[to] = stripped;
+                        config.SourcePrefixed.Add(to);
+                    }
+                    else
+                    {
+                        config.Explicit[to] = from;
+                        config.SourcePrefixed.Remove(to);
+                    }
+                }
                 else if (name == MapperGenerator.MapNullSubstituteAttributeName && args.Length == 2 && args[0].Value is string target)
                     config.NullSubstitutes[target] = args[1];
                 else if (name == MapperGenerator.MapAllowParseAttributeName)
                     foreach (var allowed in StringArguments(attribute)) config.AllowParse.Add(allowed);
+                else if (name == MapperGenerator.MapReviewedAttributeName)
+                    foreach (var reviewed in StringArguments(attribute)) config.Reviewed.Add(reviewed);
                 else
                     ReadExplicit(attribute, config);
             }
         }
 
+        /// <summary>"source.Customer.Name" -> "Customer.Name" when "source" is the method's source parameter (exact case) and not also a member of the source.</summary>
+        private bool TryStripSourcePrefix(IMethodSymbol method, string path, out string stripped)
+        {
+            stripped = path;
+            if (method.Parameters.Length == 0 || !TryGetMapTypes(method, out var source, out _)) return false;
+            var prefix = method.Parameters[0].Name + ".";
+            if (!path.StartsWith(prefix, StringComparison.Ordinal) || path.Length == prefix.Length) return false;
+            if (MemberResolver.IsNullableValueType(source, out var underlying)) source = underlying;
+            if (_resolver.GetReadableMembers(source).Any(m => string.Equals(m.Name, method.Parameters[0].Name, StringComparison.Ordinal))) return false;
+            stripped = path.Substring(prefix.Length);
+            return true;
+        }
+
         /// <summary>
         /// The method named by [MapInherit]: another method of the mapper class with the same source and destination types.
-        /// Among overloads, the one with the fewest parameters wins (usually the plain map the others extend).
+        /// When several overloads qualify, [MapInherit(nameof(M), typeof(A), ...)] picks one by its parameter types;
+        /// without them the choice would be a guess, so it is error CM0019.
         /// </summary>
         private IMethodSymbol? FindInheritedMethod(IMethodSymbol method, string name, AttributeData attribute)
         {
@@ -612,17 +688,47 @@ namespace ConventionMapper.SourceGenerator
             var matching = candidates
                 .Where(c => TryGetMapTypes(c, out var s, out var d) &&
                             SymbolEqualityComparer.Default.Equals(s, source) && SymbolEqualityComparer.Default.Equals(d, destination))
-                .OrderBy(c => c.Parameters.Length)
+                .OrderBy(c => _methodOrder.TryGetValue(c, out var order) ? order : int.MaxValue)
                 .ToList();
-            if (matching.Count > 0) return matching[0];
+            if (matching.Count == 0)
+            {
+                var first = candidates[0];
+                var detail = TryGetMapTypes(first, out var otherSource, out var otherDestination)
+                    ? "'" + name + "' maps " + Short(otherSource) + " to " + Short(otherDestination) + " but '" + method.Name + "' maps " + Short(source) + " to " + Short(destination) + "; the source and destination types must be the same"
+                    : "'" + name + "' is not a mapping method";
+                ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name, detail);
+                return null;
+            }
 
-            var first = candidates[0];
-            var detail = TryGetMapTypes(first, out var otherSource, out var otherDestination)
-                ? "'" + name + "' maps " + Short(otherSource) + " to " + Short(otherDestination) + " but '" + method.Name + "' maps " + Short(source) + " to " + Short(destination) + "; the source and destination types must be the same"
-                : "'" + name + "' is not a mapping method";
-            ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name, detail);
+            // [MapInherit(nameof(M), typeof(A), typeof(B))]: the overload with exactly these parameter types.
+            var parameterTypes = attribute.ConstructorArguments.Skip(1)
+                .SelectMany(a => a.Kind == TypedConstantKind.Array ? a.Values : ImmutableArray.Create(a))
+                .Select(a => a.Value as ITypeSymbol)
+                .ToList();
+            if (parameterTypes.Count > 0)
+            {
+                if (parameterTypes.Any(t => t == null)) return null; // unresolved typeof: the compiler reports it
+                var exact = matching.FirstOrDefault(c => c.Parameters.Length == parameterTypes.Count &&
+                                                         c.Parameters.Select(p => p.Type).SequenceEqual(parameterTypes!, SymbolEqualityComparer.Default));
+                if (exact != null) return exact;
+                ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name,
+                    "no overload has the parameters (" + string.Join(", ", parameterTypes.Select(t => Short(t!))) + "); overloads: " + Overloads(matching));
+                return null;
+            }
+
+            if (matching.Count == 1) return matching[0];
+            ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name,
+                "it matches " + matching.Count.ToString(CultureInfo.InvariantCulture) + " overloads (" + Overloads(matching) +
+                "); choose one with its parameter types, for example [MapInherit(nameof(" + name + "), " +
+                string.Join(", ", matching[0].Parameters.Select(p => "typeof(" + TypeofName(p.Type) + ")")) + ")]");
             return null;
         }
+
+        private static string Overloads(IEnumerable<IMethodSymbol> methods) => string.Join(", ", methods.Select(MethodDisplay));
+
+        /// <summary>The type as written in typeof(...): no nullable reference annotation.</summary>
+        private static string TypeofName(ITypeSymbol type) =>
+            (type.IsReferenceType ? type.WithNullableAnnotation(NullableAnnotation.NotAnnotated) : type).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
 
         /// <summary>Source and destination types of a create, update or projection method.</summary>
         private static bool TryGetMapTypes(IMethodSymbol method, out ITypeSymbol source, out ITypeSymbol destination)
@@ -653,7 +759,7 @@ namespace ConventionMapper.SourceGenerator
 
         private void CheckConfigUsage(MemberConfig config, IMethodSymbol method, ITypeSymbol destination)
         {
-            if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0 && config.AllowParse.Count == 0) return;
+            if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0 && config.AllowParse.Count == 0 && config.Reviewed.Count == 0) return;
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (destination is INamedTypeSymbol named)
             {
@@ -671,6 +777,8 @@ namespace ConventionMapper.SourceGenerator
                 if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapNullSubstitute", method.Name);
             foreach (var allowed in config.AllowParse)
                 if (!known.Contains(allowed)) Report(Diagnostics.UnknownAttributeMember, allowed, "MapAllowParse", method.Name);
+            foreach (var reviewed in config.Reviewed)
+                if (!known.Contains(reviewed)) Report(Diagnostics.UnknownAttributeMember, reviewed, "MapReviewed", method.Name);
         }
 
         // ================================================================== bodies
@@ -1045,19 +1153,25 @@ namespace ConventionMapper.SourceGenerator
 
             IParameterSymbol? parameter;
             var rest = string.Empty;
+            if (config.SourcePrefixed.Contains(destinationName)) return ParameterMatch.None;
             if (config.Explicit.TryGetValue(destinationName, out var explicitPath))
             {
                 var dot = explicitPath.IndexOf('.');
                 var head = dot < 0 ? explicitPath : explicitPath.Substring(0, dot);
                 if (!config.Parameters.TryGetValue(head, out parameter)) return ParameterMatch.None;
                 rest = dot < 0 ? string.Empty : explicitPath.Substring(dot + 1);
-                // Names match case-insensitively, so "CreateUser" also matches a parameter "createUser". Never guess.
+                // Names match case-insensitively, so "CreateUser" also matches a parameter "createUser". The exact case
+                // decides ("CreateUser" is the source member, "createUser" the parameter); otherwise it is CM0014, never a guess.
                 var sourceMatch = _resolver.FindExplicitPath(source, explicitPath);
-                if (sourceMatch != null)
+                var exactParameter = string.Equals(head, parameter.Name, StringComparison.Ordinal);
+                var exactSource = sourceMatch != null && string.Equals(head, sourceMatch[0].Name, StringComparison.Ordinal);
+                if (exactSource && !exactParameter) return ParameterMatch.None;
+                if (sourceMatch != null && exactParameter == exactSource)
                 {
                     if (_reportedAmbiguities.Add(_current?.Name + "|" + destinationName))
                         Report(Diagnostics.AmbiguousMapMemberSource, explicitPath, destinationName,
-                            Short(source) + "." + string.Join(".", sourceMatch.Select(m => m.Name)), parameter.Name);
+                            Short(source) + "." + string.Join(".", sourceMatch.Select(m => m.Name)), parameter.Name,
+                            (_current != null && _current.Parameters.Length > 0 ? _current.Parameters[0].Name : "source") + "." + explicitPath);
                     return ParameterMatch.Invalid;
                 }
             }
@@ -1931,10 +2045,15 @@ namespace ConventionMapper.SourceGenerator
                 notes.Add("sensitive");
                 SensitiveTargets(member).Add(Short(destination) + "." + memberName);
             }
-            if (IsKeyLike(destination, memberName))
+            if (IsKey(destination, memberName))
             {
-                notes.Add("⚠ key");
-                _riskyFlows.Add("`" + Short(destination) + "." + memberName + "` (key) is written from `" + PathText(path) + "`");
+                if (_currentReviewed.Contains(memberName) || _classReviewed.Contains(memberName))
+                    notes.Add("key (reviewed)");
+                else
+                {
+                    notes.Add("⚠ key");
+                    _riskyFlows.Add("`" + Short(destination) + "." + memberName + "` (key) is written from `" + PathText(path) + "`");
+                }
             }
             var description = "`" + PathText(path) + "`";
             var section = RecordMap(source, destination);
@@ -1953,14 +2072,122 @@ namespace ConventionMapper.SourceGenerator
             return name;
         }
 
-        /// <summary>Id, ID, Key, CustomerId, IntId, or a member marked [Key]: writing one by convention deserves a reviewer's eye.</summary>
-        private static bool IsKeyLike(ITypeSymbol owner, string memberName)
+        /// <summary>
+        /// A real key: a member marked [Key] or [ForeignKey], named by [PrimaryKey] or by a navigation's [ForeignKey], or, when
+        /// the destination is an EF Core entity, a key by EF's conventions (Id, &lt;Type&gt;Id, &lt;Navigation&gt;Id,
+        /// &lt;PrincipalType&gt;Id). Names alone (ErrorObjectId, RecordID on a DTO) are not keys.
+        /// </summary>
+        private bool IsKey(ITypeSymbol owner, string memberName)
         {
-            if (memberName == "Id" || memberName == "ID" || memberName == "Key") return true;
-            if (memberName.Length > 2 && (memberName.EndsWith("Id", StringComparison.Ordinal) || memberName.EndsWith("ID", StringComparison.Ordinal))) return true;
-            foreach (var member in owner.GetMembers(memberName))
-                if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "KeyAttribute")) return true;
+            var types = SelfAndBases(owner).ToList();
+            foreach (var type in types)
+            {
+                foreach (var member in type.GetMembers(memberName))
+                    if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "KeyAttribute" || a.AttributeClass?.Name == "ForeignKeyAttribute")) return true;
+                foreach (var attribute in type.GetAttributes())
+                    if (attribute.AttributeClass?.Name == "PrimaryKeyAttribute" && StringArguments(attribute).Any(n => string.Equals(n, memberName, StringComparison.Ordinal)))
+                        return true;
+                foreach (var navigation in type.GetMembers().OfType<IPropertySymbol>())
+                    foreach (var attribute in navigation.GetAttributes())
+                        if (attribute.AttributeClass?.Name == "ForeignKeyAttribute" && StringArguments(attribute).Any(n => string.Equals(n, memberName, StringComparison.Ordinal)))
+                            return true;
+            }
+
+            if (!memberName.EndsWith("id", StringComparison.OrdinalIgnoreCase) || !IsEntity(owner)) return false;
+            if (string.Equals(memberName, "Id", StringComparison.OrdinalIgnoreCase) || string.Equals(memberName, owner.Name + "Id", StringComparison.OrdinalIgnoreCase))
+                return true;
+            foreach (var type in types)
+                foreach (var navigation in type.GetMembers().OfType<IPropertySymbol>())
+                    if (IsEntity(navigation.Type) &&
+                        (string.Equals(memberName, navigation.Name + "Id", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(memberName, navigation.Type.Name + "Id", StringComparison.OrdinalIgnoreCase)))
+                        return true;
             return false;
+        }
+
+        private static IEnumerable<ITypeSymbol> SelfAndBases(ITypeSymbol type)
+        {
+            for (var t = type; t != null && t.SpecialType != SpecialType.System_Object && t.SpecialType != SpecialType.System_ValueType; t = t.BaseType)
+                yield return t;
+        }
+
+        private HashSet<ITypeSymbol>? _entities;
+
+        private bool IsEntity(ITypeSymbol type) => (_entities ??= FindEntities()).Contains(type.OriginalDefinition);
+
+        /// <summary>
+        /// EF Core entity types: the T of every DbSet&lt;T&gt; on a DbContext and of every IEntityTypeConfiguration&lt;T&gt;, in this
+        /// assembly and in referenced assemblies that use EF Core, plus the types their navigations reach.
+        /// </summary>
+        private HashSet<ITypeSymbol> FindEntities()
+        {
+            var result = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
+            var dbContext = _compilation.GetTypeByMetadataName("Microsoft.EntityFrameworkCore.DbContext");
+            if (dbContext == null) return result;
+            var dbSet = _compilation.GetTypeByMetadataName("Microsoft.EntityFrameworkCore.DbSet`1");
+            var configuration = _compilation.GetTypeByMetadataName("Microsoft.EntityFrameworkCore.IEntityTypeConfiguration`1");
+
+            var assemblies = new List<IAssemblySymbol> { _compilation.Assembly };
+            foreach (var reference in _compilation.SourceModule.ReferencedAssemblySymbols)
+                if (reference.Modules.Any(m => m.ReferencedAssemblySymbols.Any(r => r.Name == "Microsoft.EntityFrameworkCore")))
+                    assemblies.Add(reference);
+
+            var pending = new Queue<ITypeSymbol>();
+            foreach (var assembly in assemblies)
+            {
+                foreach (var type in AllTypes(assembly.GlobalNamespace))
+                {
+                    _ct.ThrowIfCancellationRequested();
+                    for (var t = type.BaseType; t != null; t = t.BaseType)
+                    {
+                        if (!SymbolEqualityComparer.Default.Equals(t, dbContext)) continue;
+                        foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+                            if (property.Type is INamedTypeSymbol set && SymbolEqualityComparer.Default.Equals(set.OriginalDefinition, dbSet))
+                                pending.Enqueue(set.TypeArguments[0]);
+                        break;
+                    }
+                    if (configuration != null)
+                        foreach (var i in type.AllInterfaces)
+                            if (SymbolEqualityComparer.Default.Equals(i.OriginalDefinition, configuration)) pending.Enqueue(i.TypeArguments[0]);
+                }
+            }
+
+            // Navigations make the types they reach entities too (EF discovers them the same way).
+            while (pending.Count > 0)
+            {
+                var entity = pending.Dequeue();
+                if (!(entity is INamedTypeSymbol named) || named.TypeKind != TypeKind.Class || !result.Add(named.OriginalDefinition)) continue;
+                foreach (var type in SelfAndBases(named))
+                    foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+                    {
+                        var target = ElementTypeOf(property.Type) ?? property.Type;
+                        if (target is INamedTypeSymbol candidate && candidate.TypeKind == TypeKind.Class && candidate.SpecialType == SpecialType.None &&
+                            !IsSystemType(candidate) && IsObjectLike(candidate, false))
+                            pending.Enqueue(candidate);
+                    }
+            }
+            return result;
+        }
+
+        private static IEnumerable<INamedTypeSymbol> AllTypes(INamespaceSymbol ns)
+        {
+            foreach (var type in ns.GetTypeMembers())
+            {
+                yield return type;
+                foreach (var nested in Nested(type)) yield return nested;
+            }
+            foreach (var child in ns.GetNamespaceMembers())
+                foreach (var type in AllTypes(child))
+                    yield return type;
+        }
+
+        private static IEnumerable<INamedTypeSymbol> Nested(INamedTypeSymbol type)
+        {
+            foreach (var nested in type.GetTypeMembers())
+            {
+                yield return nested;
+                foreach (var deeper in Nested(nested)) yield return deeper;
+            }
         }
 
         private SortedSet<string> WriteSet(IMethodSymbol method)
@@ -2105,6 +2332,12 @@ namespace ConventionMapper.SourceGenerator
             /// <summary>Extra parameters of the mapping method, by name.</summary>
             public Dictionary<string, IParameterSymbol> Parameters { get; } = new Dictionary<string, IParameterSymbol>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> UsedParameters { get; } = new HashSet<string>(StringComparer.Ordinal);
+
+            /// <summary>[MapReviewed]: key members whose writes have been reviewed (left out of "Review first").</summary>
+            public HashSet<string> Reviewed { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapMember] destinations whose path starts with the source parameter's name ("source.CreateUser").</summary>
+            public HashSet<string> SourcePrefixed { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>[MapAllowParse]: destination members allowed to use parsing or narrowing conversions.</summary>
             public HashSet<string> AllowParse { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

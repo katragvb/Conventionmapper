@@ -401,12 +401,182 @@ public class OrderDto { public int CustomerId { get; set; } public LineDto Line 
             Assert.Contains("#### `ToDto(Order, string?)` → `OrderDto`", report);
             Assert.Contains("### Nested maps", report);
             Assert.Contains("#### `Line` → `LineDto`", report);
-            Assert.Contains("`OrderDto.CustomerId` (key) is written from `CustomerId`", report);
-            Assert.Contains("`LineDto.Id` (key) is written from `Id`", report);
-            Assert.Contains("| CustomerId | `CustomerId` | ⚠ key |", report);
+            Assert.DoesNotContain("Review first", report); // DTO ids are not keys
             Assert.Contains("[\"M\"] = @\"# Data-flow report", report);
             // Method sections come in declaration order: the overload without a note first.
             Assert.True(report.IndexOf("`ToDto(Order)`", System.StringComparison.Ordinal) < report.IndexOf("`ToDto(Order, string?)`", System.StringComparison.Ordinal));
+        }
+
+        // ------------------------------------------------------------------ keys in "Review first"
+
+        [Fact]
+        public void Names_alone_do_not_make_keys()
+        {
+            var result = Generate(Usings + @"
+public class Row { public int Id { get; set; } public int ErrorObjectId { get; set; } public int RecordID { get; set; } public int ReadByUserId { get; set; } }
+public class RowDto { public int Id { get; set; } public int ErrorObjectId { get; set; } public int RecordID { get; set; } public int ReadByUserId { get; set; } }
+[GeneratedMapper] public static partial class M { public static partial RowDto Map(Row r); }");
+
+            AssertClean(result);
+            Assert.DoesNotContain("Review first", result.Report);
+            Assert.DoesNotContain("key", result.Report.Substring(result.Report.IndexOf("ByMapper =", System.StringComparison.Ordinal)));
+        }
+
+        [Fact]
+        public void Key_attributes_mark_keys()
+        {
+            var result = Generate(Usings + @"
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+public class Row { public int Code { get; set; } public int OwnerRef { get; set; } public int Tenant { get; set; } public int Plain { get; set; } }
+[Microsoft.EntityFrameworkCore.PrimaryKey(nameof(Tenant), nameof(Code))]
+public class Entity
+{
+    [Key] public int Code { get; set; }
+    [ForeignKey(""Owner"")] public int OwnerRef { get; set; }
+    public int Tenant { get; set; }
+    public int Plain { get; set; }
+}
+[GeneratedMapper] public static partial class M { public static partial Entity Map(Row r); }");
+
+            AssertClean(result);
+            Assert.Contains("`Entity.Code` (key)", result.Report);
+            Assert.Contains("`Entity.OwnerRef` (key)", result.Report);
+            Assert.Contains("`Entity.Tenant` (key)", result.Report);
+            Assert.DoesNotContain("`Entity.Plain` (key)", result.Report);
+        }
+
+        private const string EntityModels = Usings + @"
+using Microsoft.EntityFrameworkCore;
+public class Customer { public int Id { get; set; } public string Name { get; set; } = """"; }
+public class Policy
+{
+    public int PolicyId { get; set; }
+    public int CustomerId { get; set; }
+    public Customer? Customer { get; set; }
+    public int ErrorObjectId { get; set; }
+    public int ReadByUserId { get; set; }
+}
+public class Shop : DbContext { public DbSet<Policy> Policies => Set<Policy>(); }
+public class PolicyRow { public int PolicyId { get; set; } public int CustomerId { get; set; } public int ErrorObjectId { get; set; } public int ReadByUserId { get; set; } }
+";
+
+        [Fact]
+        public void Entity_keys_follow_EF_Core_conventions()
+        {
+            var result = Generate(EntityModels + @"
+[GeneratedMapper] public static partial class M { [MapIgnore(""Customer"")] public static partial Policy ToEntity(PolicyRow r); }");
+
+            AssertClean(result);
+            Assert.Contains("`Policy.PolicyId` (key)", result.Report);   // <Type>Id: primary key
+            Assert.Contains("`Policy.CustomerId` (key)", result.Report); // <Navigation>Id: foreign key
+            Assert.DoesNotContain("`Policy.ErrorObjectId` (key)", result.Report); // no ErrorObject navigation
+            Assert.DoesNotContain("`Policy.ReadByUserId` (key)", result.Report);
+        }
+
+        [Fact]
+        public void MapReviewed_takes_keys_off_the_review_list()
+        {
+            var result = Generate(EntityModels + @"
+[GeneratedMapper, MapReviewed(nameof(Policy.PolicyId))] public static partial class M
+{
+    [MapIgnore(""Customer""), MapReviewed(nameof(Policy.CustomerId))]
+    public static partial Policy ToEntity(PolicyRow r);
+
+    [MapInherit(nameof(ToEntity))]
+    public static partial Policy ToEntity(PolicyRow r, int errorObjectId);
+
+    [MapReviewed(""Nope""), MapIgnore(""Customer"")]
+    public static partial Policy Other(PolicyRow r);
+}");
+
+            Assert.DoesNotContain("`Policy.PolicyId` (key)", result.Report);
+            Assert.Contains("| PolicyId | `PolicyId` | key (reviewed) |", result.Report);
+            var first = result.Report.Substring(result.Report.IndexOf("#### `ToEntity(PolicyRow)`", System.StringComparison.Ordinal));
+            Assert.Contains("| CustomerId | `CustomerId` | key (reviewed) |", first.Substring(0, first.IndexOf("####", 5, System.StringComparison.Ordinal)));
+            var inherited = result.Report.Substring(result.Report.IndexOf("#### `ToEntity(PolicyRow, int)`", System.StringComparison.Ordinal));
+            Assert.Contains("| CustomerId | `CustomerId` | key (reviewed) |", inherited.Substring(0, inherited.IndexOf("####", 5, System.StringComparison.Ordinal)));
+            Assert.Contains("`Policy.CustomerId` (key) is written", result.Report); // still listed for Other
+            Assert.Contains(result.WithId("CM0008"), d => d.GetMessage().Contains("'Nope' in [MapReviewed]"));
+        }
+
+        // ------------------------------------------------------------------ [MapInherit] overload choice
+
+        [Fact]
+        public void MapInherit_with_several_overloads_needs_parameter_types()
+        {
+            var result = Generate(Usings + LocationModels + @"
+[GeneratedMapper] public static partial class M
+{
+    [MapExplicit(""LocationNumber"")] public static partial ImportData ToImportData(LocationData source);
+    [MapExplicit(""Street1"")] public static partial ImportData ToImportData(LocationData source, string? glClassCode);
+
+    [MapInherit(nameof(ToImportData))]
+    public static partial ImportData Ambiguous(LocationData source, string? glClassCode, decimal? exposure);
+
+    [MapInherit(nameof(ToImportData), typeof(LocationData), typeof(string))]
+    public static partial ImportData Chosen(LocationData source, string? glClassCode, decimal? exposure);
+
+    [MapInherit(nameof(ToImportData), typeof(int))]
+    public static partial ImportData Missing(LocationData source, string? glClassCode, decimal? exposure);
+}");
+
+            var errors = result.WithId("CM0019").Select(d => d.GetMessage()).ToList();
+            Assert.Equal(2, errors.Count);
+            Assert.Contains(errors, m => m.Contains("'Ambiguous'") && m.Contains("matches 2 overloads") && m.Contains("[MapInherit(nameof(ToImportData), typeof(LocationData))]"));
+            Assert.Contains(errors, m => m.Contains("'Missing'") && m.Contains("no overload has the parameters (int)"));
+            var chosen = result.Source.Substring(result.Source.IndexOf("Chosen(", System.StringComparison.Ordinal));
+            Assert.Contains("Street1 = source.Street1", chosen.Substring(0, chosen.IndexOf("Missing(", System.StringComparison.Ordinal)));
+        }
+
+        // ------------------------------------------------------------------ typed write sets, line endings
+
+        [Fact]
+        public void WriteSetOf_finds_a_method_by_name_and_parameter_types()
+        {
+            var result = Generate(Usings + @"
+public class Order { public int Id { get; set; } public string Name { get; set; } = """"; }
+public class OrderDto { public int Id { get; set; } public string Name { get; set; } = """"; public string? Note { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapIgnore(""Note"")] public static partial OrderDto ToDto(Order o);
+    public static partial OrderDto ToDto(Order o, string? note);
+}");
+
+            AssertClean(result);
+            Assert.Contains("internal static global::System.Collections.Generic.IReadOnlyList<string> WriteSetOf(string method, params global::System.Type[] parameterTypes)", result.Source);
+            Assert.Contains("parameterTypes.Length == 2 && parameterTypes[0] == typeof(global::Order) && parameterTypes[1] == typeof(string)", result.Source);
+        }
+
+        [Fact]
+        public void An_old_generator_still_loaded_after_an_upgrade_is_reported()
+        {
+            const string code = Usings + @"
+public class Order { public int Id { get; set; } }
+public class OrderDto { public int Id { get; set; } }
+[GeneratedMapper] public static partial class M { public static partial OrderDto ToDto(Order o); }";
+            var running = ConventionMapper.SourceGenerator.MapperGenerator.RunningVersion();
+            Assert.Matches(@"^\d+\.\d+\.\d+", running);
+
+            var stale = Generate(code, new Dictionary<string, string> { ["ConventionMapperSourceGeneratorVersion"] = "99.0.0" });
+            var warning = Assert.Single(stale.WithId("CM0024"));
+            Assert.Contains(running + " is running, but the project references 99.0.0", warning.GetMessage());
+
+            Assert.Empty(Generate(code, new Dictionary<string, string> { ["ConventionMapperSourceGeneratorVersion"] = running }).WithId("CM0024"));
+            Assert.Empty(Generate(code, new Dictionary<string, string> { ["ConventionMapperSourceGeneratorVersion"] = "__CONVENTIONMAPPER_VERSION__" }).WithId("CM0024"));
+            Assert.Empty(Generate(code).WithId("CM0024"));
+        }
+
+        [Fact]
+        public void Generated_files_use_only_LF_line_endings()
+        {
+            var result = Generate(Usings + @"
+public class Order { public int Id { get; set; } }
+public class OrderDto { public int Id { get; set; } }
+[GeneratedMapper] public static partial class M { public static partial OrderDto ToDto(Order o); }");
+
+            foreach (var tree in result.Output.SyntaxTrees.Where(t => t.FilePath.Contains("ConventionMapper", System.StringComparison.Ordinal)))
+                Assert.DoesNotContain("\r", tree.ToString());
         }
 
         [Fact]
@@ -446,7 +616,7 @@ public class OrderDto { public int Id { get; set; } public string Title { get; s
             Assert.DoesNotContain("Data flow:", without.Source);
             Assert.Contains("/// <summary>", with.Source);
             Assert.Contains("/// <item><term>Title</term><description>Name</description></item>", with.Source);
-            Assert.Contains("/// <item><term>Id</term><description>Id (⚠ key)</description></item>", with.Source);
+            Assert.Contains("/// <item><term>Id</term><description>Id</description></item>", with.Source); // a DTO's Id is not a key
             AssertClean(with);
             Assert.DoesNotContain(with.CompileWarnings, d => d.Id.StartsWith("CS15", System.StringComparison.Ordinal)); // XML doc warnings
         }

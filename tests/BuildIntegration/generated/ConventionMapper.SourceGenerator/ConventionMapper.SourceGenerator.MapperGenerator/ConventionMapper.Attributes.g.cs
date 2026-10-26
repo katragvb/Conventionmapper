@@ -116,20 +116,39 @@ namespace ConventionMapper
     }
 
     /// <summary>
-    /// Reuses the configuration ([MapMember], [MapIgnore], [MapExplicit], [MapNullSubstitute], [MapAllowParse]) of another
-    /// mapping method of this class with the same source and destination types, for example an overload with extra parameters:
-    /// <c>[MapInherit(nameof(ToDto))]</c>. Attributes on this method are added to (and win over) the inherited ones.
+    /// Reuses the configuration ([MapMember], [MapIgnore], [MapExplicit], [MapNullSubstitute], [MapAllowParse], [MapReviewed])
+    /// of another mapping method of this class with the same source and destination types, for example an overload with extra
+    /// parameters: <c>[MapInherit(nameof(ToDto))]</c>. When several overloads qualify, name the one to use by its parameter
+    /// types: <c>[MapInherit(nameof(ToDto), typeof(Order))]</c>. Attributes on this method are added to (and win over) the inherited ones.
     /// </summary>
     [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
     [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
     internal sealed class MapInheritAttribute : global::System.Attribute
     {
-        public MapInheritAttribute(string method)
+        public MapInheritAttribute(string method, params global::System.Type[] parameterTypes)
         {
             Method = method;
+            ParameterTypes = parameterTypes;
         }
 
         public string Method { get; }
+        public global::System.Type[] ParameterTypes { get; }
+    }
+
+    /// <summary>
+    /// Marks key members (Id, foreign keys) whose writes in this method, or in every method of the class, have been reviewed,
+    /// so they leave the "Review first" list of the data-flow report: <c>[MapReviewed(nameof(Policy.PolicyId))]</c>.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class | global::System.AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapReviewedAttribute : global::System.Attribute
+    {
+        public MapReviewedAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>
