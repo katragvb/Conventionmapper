@@ -52,6 +52,26 @@ namespace K
         }
 
         [Fact]
+        public void Clone_equality_references_and_rows_check_their_signatures()
+        {
+            var result = GeneratorHarness.Generate(Models + @"
+    public class Nested { public A Inner { get; set; } = new A(); }
+    [GeneratedMapper] public static partial class M
+    {
+        [MapClone] public static partial B NotAClone(A a);
+        [MapEquality] public static partial System.Collections.Generic.IEqualityComparer<A> Bad(A a);
+        [MapPreserveReferences] public static partial void Update(A a, B b);
+        public static partial Nested Read(System.Data.IDataRecord row);
+    }
+}");
+            var messages = result.Generator.Select(d => d.Id + " " + d.GetMessage()).ToList();
+            Assert.Contains(messages, m => m.StartsWith("CM0025") && m.Contains("a clone method must be T Clone(T value)"));
+            Assert.Contains(messages, m => m.StartsWith("CM0025") && m.Contains("an equality method must be IEqualityComparer<T> Comparer()"));
+            Assert.Contains(messages, m => m.StartsWith("CM0025") && m.Contains("only methods that create an object from an object can keep references"));
+            Assert.Contains(messages, m => m.StartsWith("CM0002") && m.Contains("column 'Inner'"));
+        }
+
+        [Fact]
         public void When_needs_a_static_bool_method()
         {
             var result = GeneratorHarness.Generate(Models + @"
