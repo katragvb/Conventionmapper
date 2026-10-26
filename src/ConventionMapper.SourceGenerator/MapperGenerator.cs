@@ -54,7 +54,7 @@ namespace ConventionMapper.SourceGenerator
 
             // One data-flow report per assembly, with a section per mapper class.
             var reports = mappers
-                .Select(static (result, _) => result.Report == null ? null : new ReportSection(result.MapperName, result.Report))
+                .Select(static (result, _) => result.Report == null ? null : new ReportSection(result.MapperName, result.Report, result.Csv ?? string.Empty, result.Json ?? "{}"))
                 .Collect();
             // The snapshot helpers use System.IO; skip them for targets without it (netstandard1.x).
             var fileApi = context.CompilationProvider.Select(static (compilation, _) =>
@@ -374,8 +374,11 @@ namespace ConventionMapper
     /// <summary>Output of one mapper class; value-equatable so unchanged mappers are not regenerated.</summary>
     internal sealed class MapperResult : IEquatable<MapperResult>
     {
-        public MapperResult(string hintName, string? source, ImmutableArray<Diagnostic> diagnostics, string? report = null, string mapperName = "")
+        public MapperResult(string hintName, string? source, ImmutableArray<Diagnostic> diagnostics, string? report = null, string mapperName = "",
+            string? csv = null, string? json = null)
         {
+            Csv = csv;
+            Json = json;
             MapperName = mapperName;
             HintName = hintName;
             Source = source;
@@ -389,12 +392,16 @@ namespace ConventionMapper
         /// <summary>Fully qualified name of the mapper class (the key of its report section).</summary>
         public string MapperName { get; }
 
+        /// <summary>This mapper's flows as CSV lines and as a JSON object.</summary>
+        public string? Csv { get; }
+        public string? Json { get; }
+
         public string HintName { get; }
         public string? Source { get; }
         public ImmutableArray<Diagnostic> Diagnostics { get; }
 
         public bool Equals(MapperResult? other) =>
-            other != null && HintName == other.HintName && MapperName == other.MapperName && Source == other.Source && Report == other.Report && Diagnostics.SequenceEqual(other.Diagnostics);
+            other != null && HintName == other.HintName && MapperName == other.MapperName && Source == other.Source && Csv == other.Csv && Json == other.Json && Report == other.Report && Diagnostics.SequenceEqual(other.Diagnostics);
 
         public override bool Equals(object? obj) => Equals(obj as MapperResult);
 
@@ -404,16 +411,20 @@ namespace ConventionMapper
     /// <summary>One mapper class's part of the data-flow report; value-equatable for incremental generation.</summary>
     internal sealed class ReportSection : IEquatable<ReportSection>
     {
-        public ReportSection(string mapper, string markdown)
+        public ReportSection(string mapper, string markdown, string csv, string json)
         {
             Mapper = mapper;
             Markdown = markdown;
+            Csv = csv;
+            Json = json;
         }
 
         public string Mapper { get; }
         public string Markdown { get; }
+        public string Csv { get; }
+        public string Json { get; }
 
-        public bool Equals(ReportSection? other) => other != null && Mapper == other.Mapper && Markdown == other.Markdown;
+        public bool Equals(ReportSection? other) => other != null && Mapper == other.Mapper && Markdown == other.Markdown && Csv == other.Csv && Json == other.Json;
 
         public override bool Equals(object? obj) => Equals(obj as ReportSection);
 

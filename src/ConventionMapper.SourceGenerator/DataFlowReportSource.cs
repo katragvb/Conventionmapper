@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -44,11 +46,75 @@ namespace ConventionMapper.SourceGenerator
                 var single = Title + "\n\n" + section.Markdown;
                 sb.Append("                [").Append(SymbolDisplay.FormatLiteral(section.Mapper, true)).Append("] = ").Append(Verbatim(single)).Append(",\n");
             }
-            sb.Append("            };\n");
+            sb.Append("            };\n\n");
+
+            // Column-level lineage: the same flows as CSV, JSON and a Mermaid diagram.
+            var csv = new StringBuilder("Mapper,Method,SourceType,SourceMember,DestinationType,DestinationMember,Notes\n");
+            foreach (var section in sections) csv.Append(section.Csv);
+            sb.Append("        /// <summary>Every flow as CSV: Mapper, Method, SourceType, SourceMember, DestinationType, DestinationMember, Notes.</summary>\n");
+            sb.Append("        public const string Csv = ").Append(Verbatim(csv.ToString())).Append(";\n\n");
+            sb.Append("        /// <summary>The report as JSON (an array with one object per mapper class), for tools such as a pull-request summary.</summary>\n");
+            sb.Append("        public const string Json = ").Append(Verbatim("[" + string.Join(",", sections.Select(s => s.Json)) + "]")).Append(";\n\n");
+            sb.Append("        /// <summary>A Mermaid flowchart of source member → destination member, across all maps (chains show column → DTO → API lineage).</summary>\n");
+            sb.Append("        public const string Mermaid = ").Append(Verbatim(MermaidChart(sections))).Append(";\n");
             if (includeSnapshotHelpers) sb.Append(SnapshotHelpers);
             sb.Append("    }\n");
             sb.Append("}\n");
             return sb.ToString();
+        }
+
+        /// <summary>flowchart LR with one node per Type.Member; sensitive flows are highlighted.</summary>
+        private static string MermaidChart(IReadOnlyList<ReportSection> sections)
+        {
+            var sb = new StringBuilder("flowchart LR\n");
+            var nodes = new Dictionary<string, string>(StringComparer.Ordinal);
+            var edges = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var section in sections)
+            {
+                foreach (var line in section.Csv.Split('\n'))
+                {
+                    var cells = SplitCsv(line);
+                    if (cells.Count < 7 || cells[3].StartsWith("parameter ", StringComparison.Ordinal) || cells[6].Contains("constant") || cells[6].Contains("computed")) continue;
+                    var from = Node(nodes, cells[2] + "." + cells[3]);
+                    var to = Node(nodes, cells[4] + "." + cells[5]);
+                    edges.Add("    " + from + (cells[6].Contains("sensitive") ? " ==> " : " --> ") + to);
+                }
+            }
+            foreach (var node in nodes.OrderBy(n => n.Value, StringComparer.Ordinal)) sb.Append("    ").Append(node.Value).Append("[\"").Append(node.Key.Replace("\"", "'")).Append("\"]\n");
+            foreach (var edge in edges) sb.Append(edge).Append('\n');
+            return sb.ToString();
+        }
+
+        private static string Node(Dictionary<string, string> nodes, string name)
+        {
+            if (!nodes.TryGetValue(name, out var id))
+            {
+                id = "n" + nodes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                nodes[name] = id;
+            }
+            return id;
+        }
+
+        private static List<string> SplitCsv(string line)
+        {
+            var cells = new List<string>();
+            var current = new StringBuilder();
+            var quoted = false;
+            for (var i = 0; i < line.Length; i++)
+            {
+                var c = line[i];
+                if (quoted)
+                {
+                    if (c == '"' && i + 1 < line.Length && line[i + 1] == '"') { current.Append('"'); i++; }
+                    else if (c == '"') quoted = false;
+                    else current.Append(c);
+                }
+                else if (c == '"') quoted = true;
+                else if (c == ',') { cells.Add(current.ToString()); current.Clear(); }
+                else current.Append(c);
+            }
+            cells.Add(current.ToString());
+            return cells;
         }
 
         private static string Verbatim(string text) => "@\"" + text.Replace("\r\n", "\n").Replace("\"", "\"\"") + "\"";
@@ -138,8 +204,14 @@ namespace ConventionMapper.SourceGenerator
             if (Updating) return;
             failures.Add(!exists
                 ? ""Created data-flow report "" + file + "": review it and commit it.""
-                : ""Data-flow report changed: "" + file + ""\n"" + Diff(actual!, expected) +
+                : ""Data-flow report changed: "" + file + ""\n"" + Summary(actual!, expected) + Diff(actual!, expected) +
                   ""\nIf the change is intended, update the file (run the tests with "" + UpdateVariable + ""=1) and commit it."");
+        }
+
+        private static string Summary(string before, string after)
+        {
+            var changes = DescribeChanges(before, after);
+            return changes.Length == 0 ? """" : ""Changes:\n"" + changes + ""\n\nDiff:\n"";
         }
 
         private static string Normalize(string text)
@@ -182,6 +254,87 @@ namespace ConventionMapper.SourceGenerator
             }
             if (endA < a.Length && shown < 200) sb.Append(""  "").Append(a[endA]).Append('\n');
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// A plain-English summary of what changed between two reports: methods added or removed, members a map now also
+        /// writes, no longer writes or writes from another source, and members added to or removed from destination types
+        /// (API contract changes).
+        /// </summary>
+        public static string DescribeChanges(string before, string after)
+        {
+            var oldMaps = ParseMaps(before, out var oldTypes);
+            var newMaps = ParseMaps(after, out var newTypes);
+            var lines = new global::System.Collections.Generic.List<string>();
+            foreach (var map in newMaps.Keys)
+                if (!oldMaps.ContainsKey(map)) lines.Add(""New map "" + map);
+            foreach (var map in oldMaps.Keys)
+                if (!newMaps.ContainsKey(map)) lines.Add(""Removed map "" + map);
+            foreach (var pair in newMaps)
+            {
+                if (!oldMaps.TryGetValue(pair.Key, out var old)) continue;
+                var name = pair.Key.Split(' ')[0];
+                foreach (var member in pair.Value)
+                {
+                    var writes = member.Value.Key != ""—"";
+                    var wrote = old.TryGetValue(member.Key, out var previous) && previous.Key != ""—"";
+                    if (writes && !wrote) lines.Add(name + "" now also writes "" + member.Key + "" (from "" + member.Value.Key + "")"");
+                    else if (!writes && wrote) lines.Add(name + "" no longer writes "" + member.Key + "" (was "" + previous.Key + "")"");
+                    else if (writes && previous.Key != member.Value.Key) lines.Add(name + "" now writes "" + member.Key + "" from "" + member.Value.Key + "" instead of "" + previous.Key);
+                }
+                foreach (var member in old)
+                    if (member.Value.Key != ""—"" && !pair.Value.ContainsKey(member.Key)) lines.Add(name + "" no longer writes "" + member.Key + "" (was "" + member.Value.Key + "")"");
+            }
+            foreach (var pair in newTypes)
+            {
+                if (!oldTypes.TryGetValue(pair.Key, out var old)) continue;
+                foreach (var member in pair.Value) if (!old.Contains(member)) lines.Add(pair.Key + "" has a new member "" + member);
+                foreach (var member in old) if (!pair.Value.Contains(member)) lines.Add(pair.Key + "" lost the member "" + member + "" (API change)"");
+            }
+            return string.Join(""\n"", global::System.Linq.Enumerable.Select(global::System.Linq.Enumerable.Distinct(lines), l => ""- "" + l));
+        }
+
+        /// <summary>""#### `Map(A)` → `B`"" sections -> member -> (source, notes); destination type -> its members.</summary>
+        private static global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>> ParseMaps(
+            string markdown, out global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.HashSet<string>> types)
+        {
+            var maps = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>>(global::System.StringComparer.Ordinal);
+            types = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.HashSet<string>>(global::System.StringComparer.Ordinal);
+            global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>? current = null;
+            global::System.Collections.Generic.HashSet<string>? currentType = null;
+            foreach (var raw in markdown.Replace(""\r\n"", ""\n"").Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith(""#### "", global::System.StringComparison.Ordinal))
+                {
+                    var heading = line.Substring(5).Replace(""`"", """");
+                    current = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>(global::System.StringComparer.Ordinal);
+                    maps[heading] = current;
+                    var arrow = heading.LastIndexOf(""→"", global::System.StringComparison.Ordinal);
+                    var type = arrow >= 0 ? heading.Substring(arrow + 1).Trim() : heading;
+                    if (!types.TryGetValue(type, out currentType))
+                    {
+                        currentType = new global::System.Collections.Generic.HashSet<string>(global::System.StringComparer.Ordinal);
+                        types[type] = currentType;
+                    }
+                    continue;
+                }
+                if (line.StartsWith(""#"", global::System.StringComparison.Ordinal))
+                {
+                    current = null;
+                    currentType = null;
+                    continue;
+                }
+                if (current == null || !line.StartsWith(""| "", global::System.StringComparison.Ordinal) || line.StartsWith(""| ---"", global::System.StringComparison.Ordinal) ||
+                    line.StartsWith(""| Destination |"", global::System.StringComparison.Ordinal)) continue;
+                var cells = line.Trim('|').Split('|');
+                if (cells.Length < 3) continue;
+                var member = cells[0].Trim().Replace("" (sensitive)"", """").Replace("" (constructor)"", """");
+                if (member.StartsWith(""("", global::System.StringComparison.Ordinal)) continue;
+                current[member] = new global::System.Collections.Generic.KeyValuePair<string, string>(cells[1].Trim().Trim('`'), cells[2].Trim());
+                currentType!.Add(member);
+            }
+            return maps;
         }
 
         private static string Resolve(string path, string callerFilePath)

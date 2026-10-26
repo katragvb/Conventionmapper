@@ -63,6 +63,34 @@ namespace ConventionMapper.Tests
         }
 
         [Fact]
+        public void A_change_is_also_described_in_plain_English()
+        {
+            var file = Path.Combine(_folder, "data-flow.md");
+            Directory.CreateDirectory(_folder);
+            var old = DataFlowReport.Markdown
+                .Replace("| AddressCity | `Address.City` | flattened |", "| AddressCity | `Address.Town` | flattened |")
+                .Replace("| Name | `Name` |  |", "| Name | — | ignored |")
+                .Replace("| Label | — | ignored |\n", "| Label | — | ignored |\n| Legacy | `Legacy` |  |\n");
+            File.WriteAllText(file, old);
+
+            var error = Assert.Throws<DataFlowReport.SnapshotMismatchException>(() => DataFlowReport.AssertMatches(file));
+
+            Assert.Contains("Changes:", error.Message);
+            Assert.Contains("- ToDto(FlowCustomer) now writes AddressCity from Address.City instead of Address.Town", error.Message);
+            Assert.Contains("- ToDto(FlowCustomer) now also writes Name (from Name)", error.Message);
+            Assert.Contains("- ToDto(FlowCustomer) no longer writes Legacy (was Legacy)", error.Message);
+            Assert.Contains("- FlowCustomerDto lost the member Legacy (API change)", error.Message);
+        }
+
+        [Fact]
+        public void Report_has_csv_json_and_mermaid_exports()
+        {
+            Assert.StartsWith("Mapper,Method,SourceType,SourceMember,DestinationType,DestinationMember,Notes\n", DataFlowReport.Csv);
+            Assert.StartsWith("[{\"mapper\":", DataFlowReport.Json);
+            Assert.StartsWith("flowchart LR\n", DataFlowReport.Mermaid);
+        }
+
+        [Fact]
         public void Update_switch_rewrites_the_file()
         {
             var file = Path.Combine(_folder, "data-flow.md");

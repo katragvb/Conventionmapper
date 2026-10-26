@@ -583,6 +583,48 @@ public class OrderDto { public int Id { get; set; } }
                 Assert.DoesNotContain("\r", tree.ToString());
         }
 
+        // ------------------------------------------------------------------ report extras
+
+        [Fact]
+        public void Report_lists_unread_source_members_and_compares_sibling_maps()
+        {
+            var result = Generate(Usings + @"
+public class QuoteReferral { public int Id { get; set; } public string Reason { get; set; } = """"; public int CreateUserId { get; set; } public decimal TivTotal { get; set; } }
+public class EndorsementReferral { public int Id { get; set; } public string Reason { get; set; } = """"; }
+public class ReferralData { public int Id { get; set; } public string Reason { get; set; } = """"; public int CreateUserId { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    public static partial ReferralData FromQuote(QuoteReferral r);
+    [MapIgnore(""CreateUserId"")] public static partial ReferralData FromEndorsement(EndorsementReferral r);
+}");
+
+            AssertClean(result);
+            var report = result.Report;
+            Assert.Contains("Source members no map reads", report);
+            Assert.Contains("- `QuoteReferral`: `TivTotal`", report);
+            Assert.Contains("Maps to `ReferralData` side by side:", report);
+            Assert.Contains("| Member | `FromEndorsement(EndorsementReferral)` | `FromQuote(QuoteReferral)` |", report);
+            Assert.Contains("| CreateUserId | ignored | `CreateUserId` |", report); // the asymmetry stands out
+        }
+
+        [Fact]
+        public void Report_exports_csv_json_mermaid_and_lineage()
+        {
+            var result = Generate(Usings + @"
+public class Customer { public string Name { get; set; } = """"; }
+public class Order { public int Id { get; set; } public Customer Customer { get; set; } = new(); [Sensitive] public string Ssn { get; set; } = """"; }
+public class OrderDto { public int Id { get; set; } public string CustomerName { get; set; } = """"; [Sensitive] public string Ssn { get; set; } = """"; public int Kind { get; set; } }
+[GeneratedMapper] public static partial class M { [MapConstant(""Kind"", 2)] public static partial OrderDto ToDto(Order o); }");
+
+            AssertClean(result);
+            Assert.Contains("Mapper,Method,SourceType,SourceMember,DestinationType,DestinationMember,Notes", result.Report);
+            Assert.Contains("M,ToDto(Order),Order,Customer.Name,OrderDto,CustomerName,flattened", result.Report);
+            Assert.Contains("\"\"member\"\":\"\"CustomerName\"\",\"\"source\"\":\"\"Customer.Name\"\"", result.Report); // JSON (escaped in a verbatim string)
+            Assert.Contains("flowchart LR", result.Report);
+            Assert.Contains("==>", result.Report); // the sensitive flow is a thick edge
+            Assert.Contains("[\"ToDto\"] = new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal) { [\"CustomerName\"] = \"Customer.Name\", [\"Id\"] = \"Id\", [\"Ssn\"] = \"Ssn\" }", result.Source);
+        }
+
         [Fact]
         public void Write_sets_list_the_members_each_method_writes()
         {

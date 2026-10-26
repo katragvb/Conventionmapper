@@ -185,8 +185,10 @@ namespace ConventionMapper.SourceGenerator
             if (hasNamespace) file.Close();
 
             ReportUnmarkedConversions();
-            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray(), BuildReport(),
-                _mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
+            var report = BuildReport();
+            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray(), report,
+                _mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                report == null ? null : BuildCsv(), report == null ? null : BuildJson());
         }
 
         private static bool IsConversionShape(IMethodSymbol method) =>
@@ -283,6 +285,37 @@ namespace ConventionMapper.SourceGenerator
             w.Line("};");
             w.Outdent();
             EmitWriteSetOf(methods, w);
+            EmitLineage(methods, w);
+        }
+
+        /// <summary>
+        /// Lineage: for each mapping method, destination member -> the source member path it is copied from (plain copies,
+        /// including flattening and built-in conversions; not parameters, constants or conversion methods). MapperAssert.WritesFrom
+        /// checks real behavior against it.
+        /// </summary>
+        private void EmitLineage(List<IMethodSymbol> methods, CodeWriter w)
+        {
+            if (!_mapper.GetMembers("Lineage").IsEmpty) return;
+            var inner = "global::System.Collections.Generic.IReadOnlyDictionary<string, string>";
+            w.Line();
+            w.Line("/// <summary>For each generated mapping method (keys as in WriteSets): destination member -> the source member path it is copied from.</summary>");
+            w.Line("internal static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, " + inner + "> Lineage =");
+            w.Indent();
+            w.Line("new global::System.Collections.Generic.Dictionary<string, " + inner + ">(global::System.StringComparer.Ordinal)");
+            w.Line("{");
+            w.Indent();
+            var names = methods.GroupBy(m => m.Name).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            foreach (var method in methods)
+            {
+                var entries = _lineage.TryGetValue(method, out var map) ? map : new SortedDictionary<string, string>(StringComparer.Ordinal);
+                var value = "new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal) { " +
+                            string.Join(", ", entries.Select(e => "[" + SymbolDisplay.FormatLiteral(e.Key, true) + "] = " + SymbolDisplay.FormatLiteral(e.Value, true))) + " }";
+                w.Line("[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "] = " + value + ",");
+                if (names[method.Name] == 1) w.Line("[" + SymbolDisplay.FormatLiteral(method.Name, true) + "] = " + value + ",");
+            }
+            w.Outdent();
+            w.Line("};");
+            w.Outdent();
         }
 
         /// <summary>
@@ -387,6 +420,7 @@ namespace ConventionMapper.SourceGenerator
             {
                 _rootSource = MemberResolver.IsNullableValueType(rootSource, out var underlying) ? underlying : rootSource;
                 _rootDestination = rootDestination;
+                if (IsObjectLike(_rootSource, true)) _rootSources.Add(_rootSource.OriginalDefinition);
             }
             WriteSet(method);
 
@@ -427,6 +461,7 @@ namespace ConventionMapper.SourceGenerator
             // The element pair is this method's root in the report and the write sets.
             _rootSource = sourceElement;
             _rootDestination = targetElement;
+            if (IsObjectLike(sourceElement, true)) _rootSources.Add(sourceElement.OriginalDefinition);
             var sourceKeyName = attribute.ConstructorArguments[0].Value as string ?? string.Empty;
             var targetKeyName = attribute.ConstructorArguments.Length > 1 && attribute.ConstructorArguments[1].Value is string t ? t : sourceKeyName;
             var removeMissing = !attribute.NamedArguments.Any(a => a.Key == "RemoveMissing" && a.Value.Value is bool b && !b);
@@ -2498,6 +2533,12 @@ namespace ConventionMapper.SourceGenerator
             /// <summary>The mapping method this section belongs to; null for nested maps.</summary>
             public IMethodSymbol? Method { get; }
             public SortedDictionary<string, string> Rows { get; } = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+            /// <summary>Destination member -> (source, notes), for the side-by-side comparison of sibling maps.</summary>
+            public SortedDictionary<string, KeyValuePair<string, string>> Cells { get; } = new SortedDictionary<string, KeyValuePair<string, string>>(StringComparer.Ordinal);
+
+            /// <summary>The destination type (as shown).</summary>
+            public string Destination { get; set; } = string.Empty;
         }
 
         private static readonly SymbolDisplayFormat MethodDisplayFormat = new SymbolDisplayFormat(
@@ -2521,7 +2562,7 @@ namespace ConventionMapper.SourceGenerator
                 key = "1|" + _current!.Name + "|" + _methodOrder[_current].ToString("D4", CultureInfo.InvariantCulture);
                 if (!_flows.TryGetValue(key, out section))
                 {
-                    section = new FlowSection("`" + MethodDisplay(_current) + "` → `" + Short(destination) + "`", _current);
+                    section = new FlowSection("`" + MethodDisplay(_current) + "` → `" + Short(destination) + "`", _current) { Destination = Short(destination) };
                     _flows[key] = section;
                 }
             }
@@ -2539,13 +2580,19 @@ namespace ConventionMapper.SourceGenerator
             return section;
         }
 
-        private void RecordIgnored(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
-            RecordMap(source, destination).Rows[member.Name] =
-                "| " + DestinationCell(member.Name, member) + " | — | ignored |";
+        private void RecordIgnored(ITypeSymbol source, ITypeSymbol destination, ISymbol member)
+        {
+            var section = RecordMap(source, destination);
+            section.Rows[member.Name] = "| " + DestinationCell(member.Name, member) + " | — | ignored |";
+            section.Cells[member.Name] = new KeyValuePair<string, string>("—", "ignored");
+        }
 
-        private void RecordSkipped(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
-            RecordMap(source, destination).Rows[member.Name] =
-                "| " + DestinationCell(member.Name, member) + " | — | not listed ([MapExplicit]) |";
+        private void RecordSkipped(ITypeSymbol source, ITypeSymbol destination, ISymbol member)
+        {
+            var section = RecordMap(source, destination);
+            section.Rows[member.Name] = "| " + DestinationCell(member.Name, member) + " | — | not listed ([MapExplicit]) |";
+            section.Cells[member.Name] = new KeyValuePair<string, string>("—", "not listed");
+        }
 
         private void RecordFlow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, List<ISymbol> path, IEnumerable<string>? extraNotes)
         {
@@ -2564,14 +2611,15 @@ namespace ConventionMapper.SourceGenerator
                 if (notes.All(n => !n.StartsWith("via ", StringComparison.Ordinal)))
                     RecordLineage(source, destination, memberName, PathText(path));
             }
-            RecordRow(source, destination, destinationName, destinationSymbol, "`" + PathText(path) + "`", notes);
+            RecordRow(source, destination, destinationName, destinationSymbol, "`" + PathText(path) + "`", notes,
+                path[0] is IParameterSymbol ? "parameter " + PathText(path) : PathText(path));
         }
 
         /// <summary>A value that does not come from a source member: a constant or a [MapFrom] method.</summary>
         private void RecordComputed(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, string description, List<string> notes) =>
-            RecordRow(source, destination, destinationName, destinationSymbol, description, notes);
+            RecordRow(source, destination, destinationName, destinationSymbol, description, notes, description.Trim('`'));
 
-        private void RecordRow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, string description, List<string> notes)
+        private void RecordRow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, string description, List<string> notes, string sourcePath)
         {
             var memberName = DestinationMemberName(destination, destinationName);
             var reviewed = _currentReviewed.Contains(memberName) || _classReviewed.Contains(memberName);
@@ -2589,8 +2637,34 @@ namespace ConventionMapper.SourceGenerator
             var section = RecordMap(source, destination);
             section.Rows[destinationName] =
                 "| " + DestinationCell(destinationName, destinationSymbol) + " | " + description + " | " + string.Join(", ", notes) + " |";
+            section.Cells[memberName] = new KeyValuePair<string, string>(description, string.Join(", ", notes));
             if (section.Method != null) WriteSet(section.Method).Add(memberName);
+            _edges.Add(new Edge(section.Method != null ? MethodDisplay(section.Method) : "(nested)", Short(source), sourcePath,
+                Short(destination.WithNullableAnnotation(NullableAnnotation.NotAnnotated)), memberName, string.Join(", ", notes)));
         }
+
+        /// <summary>One data flow, for the CSV, JSON and Mermaid exports.</summary>
+        private readonly struct Edge
+        {
+            public Edge(string method, string sourceType, string sourcePath, string destinationType, string destinationMember, string notes)
+            {
+                Method = method;
+                SourceType = sourceType;
+                SourcePath = sourcePath;
+                DestinationType = destinationType;
+                DestinationMember = destinationMember;
+                Notes = notes;
+            }
+
+            public string Method { get; }
+            public string SourceType { get; }
+            public string SourcePath { get; }
+            public string DestinationType { get; }
+            public string DestinationMember { get; }
+            public string Notes { get; }
+        }
+
+        private readonly List<Edge> _edges = new List<Edge>();
 
         // ------------------------------------------------------------------ lineage and source reads
 
@@ -2792,6 +2866,90 @@ namespace ConventionMapper.SourceGenerator
             return targets;
         }
 
+        /// <summary>Readable members of each root source type that no map of this class reads (only data members, not Get-methods).</summary>
+        private SortedDictionary<string, List<string>> UnreadSourceMembers()
+        {
+            var result = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var type in _rootSources)
+            {
+                var unread = _resolver.GetReadableMembers(type)
+                    .Where(m => !(m is IMethodSymbol))
+                    .Where(m => !(m.ContainingType != null && _reads.TryGetValue(m.ContainingType.OriginalDefinition, out var names) && names.Contains(m.Name)))
+                    .Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
+                if (unread.Count > 0) result[Short(type)] = unread;
+            }
+            return result;
+        }
+
+        /// <summary>The flows as CSV lines (no header): Mapper,Method,SourceType,SourceMember,DestinationType,DestinationMember,Notes.</summary>
+        private string BuildCsv()
+        {
+            var mapper = _mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+            var sb = new StringBuilder();
+            foreach (var edge in _edges.Distinct())
+                sb.Append(Csv(mapper)).Append(',').Append(Csv(edge.Method)).Append(',').Append(Csv(edge.SourceType)).Append(',').Append(Csv(edge.SourcePath))
+                  .Append(',').Append(Csv(edge.DestinationType)).Append(',').Append(Csv(edge.DestinationMember)).Append(',').Append(Csv(edge.Notes)).Append('\n');
+            return sb.ToString();
+        }
+
+        private static string Csv(string value) =>
+            value.IndexOfAny(new[] { ',', '"', '\n' }) >= 0 ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
+
+        /// <summary>This mapper's flows as a JSON object (for tools such as a pull-request summary).</summary>
+        private string BuildJson()
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"mapper\":").Append(Json(_mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat))).Append(",\"maps\":[");
+            var first = true;
+            foreach (var section in _flows.Values)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("{\"map\":").Append(Json(section.Method != null ? MethodDisplay(section.Method) : section.Heading.Replace("`", string.Empty)))
+                  .Append(",\"destination\":").Append(Json(section.Destination)).Append(",\"members\":[");
+                var firstMember = true;
+                foreach (var cell in section.Cells)
+                {
+                    if (!firstMember) sb.Append(',');
+                    firstMember = false;
+                    sb.Append("{\"member\":").Append(Json(cell.Key)).Append(",\"source\":").Append(Json(cell.Value.Key.Trim('`')))
+                      .Append(",\"notes\":").Append(Json(cell.Value.Value)).Append('}');
+                }
+                sb.Append("]}");
+            }
+            sb.Append("],\"unreadSourceMembers\":{");
+            var firstType = true;
+            foreach (var pair in UnreadSourceMembers())
+            {
+                if (!firstType) sb.Append(',');
+                firstType = false;
+                sb.Append(Json(pair.Key)).Append(":[").Append(string.Join(",", pair.Value.Select(Json))).Append(']');
+            }
+            sb.Append("}}");
+            return sb.ToString();
+        }
+
+        private static string Json(string value)
+        {
+            var sb = new StringBuilder("\"");
+            foreach (var c in value)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            return sb.Append('"').ToString();
+        }
+
         /// <summary>The Markdown section for this mapper class (combined per assembly into ConventionMapper.Generated.DataFlowReport).</summary>
         private string? BuildReport()
         {
@@ -2830,6 +2988,34 @@ namespace ConventionMapper.SourceGenerator
                     sb.Append("| `").Append(pair.Key.Name).Append("()`").Append(marked)
                       .Append(" | ").Append(Short(pair.Key.Parameters[0].Type)).Append(" → ").Append(Short(pair.Key.ReturnType))
                       .Append(" | ").Append(string.Join(", ", pair.Value.Select(v => "`" + v + "`"))).AppendLine(" |");
+                }
+                sb.AppendLine();
+            }
+
+            var unread = UnreadSourceMembers();
+            if (unread.Count > 0)
+            {
+                sb.AppendLine("Source members no map reads (dead data, or a forgotten mapping?):").AppendLine();
+                foreach (var pair in unread) sb.Append("- `").Append(pair.Key).Append("`: ").AppendLine(string.Join(", ", pair.Value.Select(m => "`" + m + "`")));
+                sb.AppendLine();
+            }
+
+            foreach (var group0 in _flows.Values.Where(f => f.Method != null).GroupBy(f => f.Destination).Where(g => g.Count() > 1))
+            {
+                var siblings = group0.ToList();
+                sb.Append("Maps to `").Append(group0.Key).AppendLine("` side by side:").AppendLine();
+                sb.Append("| Member |");
+                foreach (var sibling in siblings) sb.Append(" `").Append(MethodDisplay(sibling.Method!)).Append("` |");
+                sb.AppendLine();
+                sb.Append("| --- |");
+                foreach (var _ in siblings) sb.Append(" --- |");
+                sb.AppendLine();
+                foreach (var member in siblings.SelectMany(f => f.Cells.Keys).Distinct().OrderBy(m => m, StringComparer.Ordinal))
+                {
+                    sb.Append("| ").Append(member).Append(" |");
+                    foreach (var sibling in siblings)
+                        sb.Append(' ').Append(sibling.Cells.TryGetValue(member, out var cell) ? (cell.Key == "—" ? cell.Value : cell.Key) : "—").Append(" |");
+                    sb.AppendLine();
                 }
                 sb.AppendLine();
             }
