@@ -7,7 +7,7 @@ using System.Reflection;
 namespace ConventionMapper.Testing
 {
     /// <summary>Assertions for mapping methods. Failures throw <see cref="MapperAssertException"/>, which every test framework reports.</summary>
-    public static class MapperAssert
+    public static partial class MapperAssert
     {
         // ------------------------------------------------------------------ write sets
 

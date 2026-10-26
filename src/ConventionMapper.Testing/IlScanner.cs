@@ -54,6 +54,10 @@ namespace ConventionMapper.Testing
             return result;
         }
 
+        /// <summary>Keys of the methods <paramref name="method"/> references (its calls, method groups and expression trees).</summary>
+        public static HashSet<string> ReferencedBy(MethodBase method) =>
+            new HashSet<string>(References(method).Select(r => MapperAssert.Key(r.Target)), StringComparer.Ordinal);
+
         private static IEnumerable<MethodBase> Methods(Assembly assembly, Type? excluded)
         {
             const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;

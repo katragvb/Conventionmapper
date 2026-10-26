@@ -319,38 +319,49 @@ namespace ConventionMapper.SourceGenerator
             w.Outdent();
             w.Line("};");
             w.Outdent();
+            EmitLineageOf(methods, w);
         }
 
         /// <summary>
         /// WriteSetOf(nameof(M), typeof(A), ...): the write set by method name and parameter types, so a renamed method is a
         /// compile error and a changed signature throws (listing the current overloads) instead of a silently missing key.
         /// </summary>
-        private void EmitWriteSetOf(List<IMethodSymbol> methods, CodeWriter w)
+        private void EmitWriteSetOf(List<IMethodSymbol> methods, CodeWriter w) =>
+            EmitAccessor(methods, w, "WriteSetOf", "WriteSets", "global::System.Collections.Generic.IReadOnlyList<string>",
+                "The destination members the generated method <paramref name=\"method\"/> writes. Pass its parameter types when it has overloads:",
+                "<c>WriteSetOf(nameof(ToDto), typeof(Order), typeof(string))</c>. Throws when no generated method matches.");
+
+        /// <summary>LineageOf(nameof(M), typeof(A), ...): the lineage of a method by name and parameter types, like WriteSetOf.</summary>
+        private void EmitLineageOf(List<IMethodSymbol> methods, CodeWriter w) =>
+            EmitAccessor(methods, w, "LineageOf", "Lineage", "global::System.Collections.Generic.IReadOnlyDictionary<string, string>",
+                "For the generated method <paramref name=\"method\"/>: destination member -> the source member path it is copied from.",
+                "Pass its parameter types when it has overloads: <c>LineageOf(nameof(ToDto), typeof(Order))</c>. Throws when no generated method matches.");
+
+        private void EmitAccessor(List<IMethodSymbol> methods, CodeWriter w, string name, string field, string returnType, string summary1, string summary2)
         {
-            if (!_mapper.GetMembers("WriteSetOf").IsEmpty) return;
-            var list = "global::System.Collections.Generic.IReadOnlyList<string>";
+            if (!_mapper.GetMembers(name).IsEmpty) return;
             w.Line();
             w.Line("/// <summary>");
-            w.Line("/// The destination members the generated method <paramref name=\"method\"/> writes. Pass its parameter types when it has overloads:");
-            w.Line("/// <c>WriteSetOf(nameof(ToDto), typeof(Order), typeof(string))</c>. Throws when no generated method matches.");
+            w.Line("/// " + summary1);
+            w.Line("/// " + summary2);
             w.Line("/// </summary>");
-            w.Open("internal static " + list + " WriteSetOf(string method, params global::System.Type[] parameterTypes)");
+            w.Open("internal static " + returnType + " " + name + "(string method, params global::System.Type[] parameterTypes)");
             w.Line("var candidates = 0;");
             foreach (var method in methods)
             {
                 var types = method.Parameters.Select(p => "typeof(" + T(TypeofType(p.Type)) + ")").ToList();
                 w.Open("if (method == " + SymbolDisplay.FormatLiteral(method.Name, true) + ")");
                 w.Line("candidates++;");
-                w.Line("if (parameterTypes.Length == 0 && WriteSets.ContainsKey(method)) return WriteSets[method];");
+                w.Line("if (parameterTypes.Length == 0 && " + field + ".ContainsKey(method)) return " + field + "[method];");
                 var condition = "parameterTypes.Length == " + types.Count.ToString(CultureInfo.InvariantCulture) +
                                 string.Concat(types.Select((t, i) => " && parameterTypes[" + i.ToString(CultureInfo.InvariantCulture) + "] == " + t));
-                w.Line("if (" + condition + ") return WriteSets[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "];");
+                w.Line("if (" + condition + ") return " + field + "[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "];");
                 w.Close();
             }
             w.Line("throw new global::System.ArgumentException(candidates == 0");
             w.Indent();
             w.Line("? \"No generated mapping method is named '\" + method + \"'.\"");
-            w.Line(": \"No generated overload of '\" + method + \"' has these parameter types. Overloads: \" + string.Join(\", \", global::System.Linq.Enumerable.Where(WriteSets.Keys, k => k.StartsWith(method + \"(\", global::System.StringComparison.Ordinal))), nameof(method));");
+            w.Line(": \"No generated overload of '\" + method + \"' has these parameter types. Overloads: \" + string.Join(\", \", global::System.Linq.Enumerable.Where(" + field + ".Keys, k => k.StartsWith(method + \"(\", global::System.StringComparison.Ordinal))), nameof(method));");
             w.Outdent();
             w.Close();
         }
