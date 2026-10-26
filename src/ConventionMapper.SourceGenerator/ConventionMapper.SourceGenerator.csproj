@@ -46,6 +46,9 @@
     <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
+    <!-- ConventionMapperGeneratedDocs and ConventionMapperEmitGeneratedCode (see docs/source-generator.md). -->
+    <None Include="build\ConventionMapper.SourceGenerator.props" Pack="true" PackagePath="build\" />
+    <None Include="build\ConventionMapper.SourceGenerator.targets" Pack="true" PackagePath="build\" />
   </ItemGroup>
 
   <ItemGroup>
