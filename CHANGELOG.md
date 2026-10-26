@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.7.0 (unreleased)
+## 1.7.1 (unreleased)
+
+### Fixes
+- Source generator: a `[MapMember]` source path that matched both a source member and a method parameter (case-insensitively, e.g. `"CreateUser"` and `createUser`) was bound to the parameter without a warning, which could generate wrong code such as `int.Parse(createUser)`. This is now error CM0014. Implicit matching is unchanged: a parameter still sets the destination member with its own name.
+
+## 1.7.0 (2026-10-26)
 
 ### Data-flow reports
 - `config.DataFlowReport()` returns a Markdown report of every map: where each destination member gets its value (matching name, flattened path, computed, ignored, not mapped) and every place a `[Sensitive]` member is copied to. Useful for code reviews and privacy audits.

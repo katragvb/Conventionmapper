@@ -14,7 +14,7 @@
 
     <!-- ===== NuGet package: analyzer-only, no runtime dependency ===== -->
     <PackageId>ConventionMapper.SourceGenerator</PackageId>
-    <Version>1.7.0</Version>
+    <Version>1.7.1</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>

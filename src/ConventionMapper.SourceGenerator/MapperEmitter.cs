@@ -37,6 +37,7 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>Ordinary (non-partial) static conversion methods; the only user methods used inside projections.</summary>
         private readonly Dictionary<string, IMethodSymbol> _conversionMethods = new Dictionary<string, IMethodSymbol>(StringComparer.Ordinal);
         private readonly HashSet<string> _reportedEnumPairs = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _reportedAmbiguities = new HashSet<string>(StringComparer.Ordinal);
 
         // Data-flow report: "`S` → `D`" -> destination member -> table row; sensitive member -> destinations.
         private readonly SortedDictionary<string, SortedDictionary<string, string>> _flows = new SortedDictionary<string, SortedDictionary<string, string>>(StringComparer.Ordinal);
@@ -441,7 +442,7 @@ namespace ConventionMapper.SourceGenerator
                     string? value = null;
                     List<ISymbol>? path;
                     MemberAccess access = default;
-                    var fromParameter = ResolveParameter(p.Name, config, false, out var parameterPath, out var parameterAccess);
+                    var fromParameter = ResolveParameter(source, p.Name, config, out var parameterPath, out var parameterAccess);
                     if (fromParameter == ParameterMatch.Invalid)
                     {
                         ok = false;
@@ -534,7 +535,7 @@ namespace ConventionMapper.SourceGenerator
             var destinationName = destinationMember.Name;
             var destinationType = MemberResolver.TypeOf(destinationMember);
             List<ISymbol>? path;
-            var fromParameter = ResolveParameter(destinationName, config, true, out var parameterPath, out var parameterAccess);
+            var fromParameter = ResolveParameter(source, destinationName, config, out var parameterPath, out var parameterAccess);
             if (fromParameter == ParameterMatch.Invalid) return null;
             if (fromParameter == ParameterMatch.Found)
             {
@@ -587,7 +588,7 @@ namespace ConventionMapper.SourceGenerator
         /// An extra method parameter as the source of a destination member: a parameter with the member's name, or a
         /// [MapMember] path that starts with a parameter name ("policy" or "policy.Number").
         /// </summary>
-        private ParameterMatch ResolveParameter(string destinationName, MemberConfig config, bool report, out List<ISymbol> path, out MemberAccess access)
+        private ParameterMatch ResolveParameter(ITypeSymbol source, string destinationName, MemberConfig config, out List<ISymbol> path, out MemberAccess access)
         {
             path = null!;
             access = default;
@@ -601,6 +602,15 @@ namespace ConventionMapper.SourceGenerator
                 var head = dot < 0 ? explicitPath : explicitPath.Substring(0, dot);
                 if (!config.Parameters.TryGetValue(head, out parameter)) return ParameterMatch.None;
                 rest = dot < 0 ? string.Empty : explicitPath.Substring(dot + 1);
+                // Names match case-insensitively, so "CreateUser" also matches a parameter "createUser". Never guess.
+                var sourceMatch = _resolver.FindExplicitPath(source, explicitPath);
+                if (sourceMatch != null)
+                {
+                    if (_reportedAmbiguities.Add(_current?.Name + "|" + destinationName))
+                        Report(Diagnostics.AmbiguousMapMemberSource, explicitPath, destinationName,
+                            Short(source) + "." + string.Join(".", sourceMatch.Select(m => m.Name)), parameter.Name);
+                    return ParameterMatch.Invalid;
+                }
             }
             else if (!config.Parameters.TryGetValue(destinationName, out parameter))
             {
@@ -613,7 +623,8 @@ namespace ConventionMapper.SourceGenerator
                 var found = _resolver.FindExplicitPath(parameter.Type, rest);
                 if (found == null)
                 {
-                    if (report) Report(Diagnostics.UnknownAttributeMember, explicitPath!, "MapMember", parameter.Name);
+                    if (_reportedAmbiguities.Add(_current?.Name + "|" + destinationName))
+                        Report(Diagnostics.UnknownAttributeMember, explicitPath!, "MapMember", parameter.Name);
                     return ParameterMatch.Invalid;
                 }
                 members = found;

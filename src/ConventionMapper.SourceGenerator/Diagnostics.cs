@@ -67,6 +67,11 @@ namespace ConventionMapper.SourceGenerator
             "The null substitute for '{0}' must be a constant of a type that converts implicitly to {1}",
             Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor AmbiguousMapMemberSource = new DiagnosticDescriptor(
+            "CM0014", "Ambiguous [MapMember] source",
+            "Source path '{0}' for '{1}' matches both the source member '{2}' and the parameter '{3}' (names are case-insensitive). Rename the parameter so the source is unambiguous.",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",
