@@ -136,7 +136,10 @@ namespace ConventionMapper.SourceGenerator
                     if (attribute.AttributeClass?.ToDisplayString() == MapperGenerator.MapFromAttributeName && attribute.ConstructorArguments.Length == 2 &&
                         attribute.ConstructorArguments[0].Value is string computeName)
                         computeMethods.Add(computeName);
-            foreach (var pair in methods) RegisterUserMap(pair.Key);
+            // Log, redact and diff methods have their own meaning; they are never conversions.
+            foreach (var pair in methods)
+                if (!HasAttribute(pair.Key, MapperGenerator.MapLogStringAttributeName) && !HasAttribute(pair.Key, MapperGenerator.MapRedactAttributeName))
+                    RegisterUserMap(pair.Key);
             foreach (var member in _mapper.GetMembers())
             {
                 if (!(member is IMethodSymbol method) || method.MethodKind != MethodKind.Ordinary || IsPartialDefinition(method)) continue;
@@ -437,6 +440,202 @@ namespace ConventionMapper.SourceGenerator
             _rootSource = _rootDestination = null;
         }
 
+        // ------------------------------------------------------------------ [MapRedact], [MapLogString], Diff
+
+        /// <summary>The masked value of a [Sensitive] member; nested objects and collections are redacted by helpers.</summary>
+        private string RedactValue(ISymbol member, ITypeSymbol type, string value)
+        {
+            if (MemberResolver.IsSensitive(member))
+                return type.SpecialType == SpecialType.System_String ? "\"***\"" : "default(" + T(type) + ")!";
+            if (IsObjectLike(type, false) && ContainsSensitive(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+                return RedactHelper((INamedTypeSymbol)type.WithNullableAnnotation(NullableAnnotation.NotAnnotated)) + "(" + value + ")";
+            var element = ElementTypeOf(type);
+            var kind = GetCollectionKind(type);
+            if (element != null && (kind == CollectionKind.List || kind == CollectionKind.Array) && IsObjectLike(element, false) &&
+                ContainsSensitive(element, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+            {
+                var helper = RedactHelper((INamedTypeSymbol)element.WithNullableAnnotation(NullableAnnotation.NotAnnotated));
+                var v = NewVariable();
+                var items = "global::System.Linq.Enumerable.Select(" + v + ", " + helper + ")";
+                var collected = kind == CollectionKind.Array ? "global::System.Linq.Enumerable.ToArray(" + items + ")" : "global::System.Linq.Enumerable.ToList(" + items + ")";
+                return "(" + value + " is { } " + v + " ? " + collected + " : null!)";
+            }
+            return value;
+        }
+
+        private bool ContainsSensitive(ITypeSymbol type, HashSet<ITypeSymbol> visited)
+        {
+            if (!visited.Add(type)) return false;
+            foreach (var member in _resolver.GetReadableMembers(type))
+            {
+                if (member is IMethodSymbol) continue;
+                if (MemberResolver.IsSensitive(member)) return true;
+                var memberType = MemberResolver.TypeOf(member);
+                var target = ElementTypeOf(memberType) ?? memberType;
+                if (IsObjectLike(target, false) && ContainsSensitive(target, visited)) return true;
+            }
+            return false;
+        }
+
+        private string RedactHelper(INamedTypeSymbol type)
+        {
+            var key = "redact:" + T(type);
+            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            var name = "__Redact" + (++_counter).ToString(CultureInfo.InvariantCulture) + "_" + Identifier(type);
+            _helperNames[key] = name;
+            var w = new CodeWriter(_memberIndent);
+            w.Line();
+            w.Open("private static " + T(type) + " " + name + "(" + T(type) + " value)");
+            EmitCreateBody(w, type, type, "value", new MemberConfig { Redact = true });
+            w.Close();
+            _helpers.Append(w.ToString());
+            return name;
+        }
+
+        /// <summary>string ToLogString(T value) with [MapLogString]: "T { A = 1, B = "x", Ssn = *** }".</summary>
+        private void EmitLogString(IMethodSymbol method, CodeWriter w)
+        {
+            if (method.Parameters.Length != 1 || method.ReturnType.SpecialType != SpecialType.System_String)
+            {
+                Report(Diagnostics.InvalidValueAttribute, "MapLogString", method.Name, method.Name, "a log method must be string ToLogString(T value)");
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+            var type = method.Parameters[0].Type;
+            var value = Escape(method.Parameters[0].Name);
+            w.Line("var sb = new global::System.Text.StringBuilder();");
+            w.Line("_ = " + LogAppend(type, value, "0", null) + ";");
+            w.Line("return sb.ToString();");
+        }
+
+        /// <summary>An expression that appends <paramref name="value"/> to "sb" (used as "_ = ...;").</summary>
+        private string LogAppend(ITypeSymbol type, string value, string depth, ISymbol? member)
+        {
+            if (member != null && MemberResolver.IsSensitive(member)) return "sb.Append(\"***\")";
+            if (type.SpecialType == SpecialType.System_String)
+                return "(" + value + " is null ? sb.Append(\"null\") : sb.Append('\"').Append(" + value + ").Append('\"'))";
+            var plain = MemberResolver.IsNullableValueType(type, out var underlying) ? underlying : type;
+            if (IsObjectLike(plain, true) && !(plain is IArrayTypeSymbol))
+                return "sb.Append(" + LogHelper(plain.WithNullableAnnotation(NullableAnnotation.NotAnnotated)) + "(" + value + ", " + depth + "))";
+            if (ElementTypeOf(type) != null)
+                return "(" + value + " is null ? sb.Append(\"null\") : sb.Append('[').Append(global::System.Linq.Enumerable.Count(" + value + ")).Append(\" items]\"))";
+            return LogScalarHelper() + "(sb, " + value + ")";
+        }
+
+        private string LogHelper(ITypeSymbol type)
+        {
+            var key = "log:" + T(type);
+            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            var name = "__Log" + (++_counter).ToString(CultureInfo.InvariantCulture) + "_" + Identifier(type);
+            _helperNames[key] = name;
+            var w = new CodeWriter(_memberIndent);
+            w.Line();
+            w.Open("private static string " + name + "(" + T(type) + "? value, int depth)");
+            w.Line("if (value is null) return \"null\";");
+            w.Line("if (depth > 3) return \"" + Short(type) + " { ... }\";");
+            w.Line("var sb = new global::System.Text.StringBuilder();");
+            w.Line("sb.Append(\"" + Short(type) + " { \");");
+            var first = true;
+            foreach (var member in _resolver.GetReadableMembers(type))
+            {
+                if (member is IMethodSymbol) continue;
+                w.Line((first ? string.Empty : "sb.Append(\", \"); ") + "sb.Append(\"" + member.Name + " = \");");
+                first = false;
+                var access = "value." + Escape(member.Name);
+                w.Line("_ = " + LogAppend(MemberResolver.TypeOf(member), access, "depth + 1", member) + ";");
+            }
+            w.Line("sb.Append(\" }\");");
+            w.Line("return sb.ToString();");
+            w.Close();
+            _helpers.Append(w.ToString());
+            return name;
+        }
+
+        private string LogScalarHelper()
+        {
+            const string key = "helper:logscalar";
+            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            var name = "__LogScalar";
+            _helperNames[key] = name;
+            var w = new CodeWriter(_memberIndent);
+            w.Line();
+            w.Line("private static global::System.Text.StringBuilder " + name + "(global::System.Text.StringBuilder sb, object? value) =>");
+            w.Indent();
+            w.Line("value is null ? sb.Append(\"null\") : value is global::System.IFormattable f ? sb.Append(f.ToString(null, global::System.Globalization.CultureInfo.InvariantCulture)) : sb.Append(value);");
+            w.Outdent();
+            _helpers.Append(w.ToString());
+            return name;
+        }
+
+        /// <summary>
+        /// IReadOnlyList&lt;FieldChange&gt; Diff(TBefore before, TAfter after), or, for public methods (FieldChange is internal),
+        /// IReadOnlyList&lt;(string Member, object? Before, object? After)&gt;.
+        /// </summary>
+        private static bool IsDiffMethod(IMethodSymbol method) =>
+            method.Parameters.Length == 2 && method.ReturnType is INamedTypeSymbol list && list.IsGenericType &&
+            list.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IReadOnlyList<T>" &&
+            (list.TypeArguments[0].ToDisplayString() == MapperGenerator.FieldChangeName || IsChangeTuple(list.TypeArguments[0]));
+
+        private static bool IsChangeTuple(ITypeSymbol type) =>
+            type is INamedTypeSymbol tuple && tuple.IsTupleType && tuple.TupleElements.Length == 3 &&
+            tuple.TupleElements[0].Type.SpecialType == SpecialType.System_String &&
+            tuple.TupleElements[1].Type.SpecialType == SpecialType.System_Object && tuple.TupleElements[2].Type.SpecialType == SpecialType.System_Object;
+
+        /// <summary>
+        /// Compares the members the conventions match (the same matching as a map from TBefore to TAfter, with [MapMember] and
+        /// [MapIgnore]); [Sensitive] values are reported as "***".
+        /// </summary>
+        private void EmitDiff(IMethodSymbol method, CodeWriter w)
+        {
+            var config = ReadConfig(method);
+            var before = method.Parameters[0].Type;
+            var after = method.Parameters[1].Type;
+            var b = Escape(method.Parameters[0].Name);
+            var a = Escape(method.Parameters[1].Name);
+            var element = ((INamedTypeSymbol)method.ReturnType).TypeArguments[0];
+            var isTuple = IsChangeTuple(element);
+            var change = isTuple ? element.ToDisplayString(SignatureFormat) : "global::" + MapperGenerator.FieldChangeName;
+            string Create(string member, string oldValue, string newValue) =>
+                isTuple ? "(" + member + ", (object?)(" + oldValue + "), (object?)(" + newValue + "))" : "new " + change + "(" + member + ", " + oldValue + ", " + newValue + ")";
+            w.Line("var changes = new global::System.Collections.Generic.List<" + change + ">();");
+            w.Open("if (" + b + " is null || " + a + " is null)");
+            w.Line("if (!ReferenceEquals(" + b + ", " + a + ")) changes.Add(" + Create("\"(object)\"", b, a) + ");");
+            w.Line("return changes;");
+            w.Close();
+            if (!IsObjectLike(before, true) || !IsObjectLike(after, true))
+            {
+                Report(Diagnostics.UnsupportedSignature, method.Name);
+                w.Line("return changes;");
+                return;
+            }
+            RecordMap(before, after);
+            foreach (var member in _resolver.GetReadableMembers(after))
+            {
+                if (member is IMethodSymbol || config.Ignored.Contains(member.Name) || !config.Includes(member.Name)) continue;
+                var path = config.Explicit.TryGetValue(member.Name, out var explicitPath)
+                    ? _resolver.FindExplicitPath(before, explicitPath)
+                    : FindConventionPath(before, member.Name, after, out _);
+                if (path == null) continue; // members only on one side are not compared
+                var oldAccess = BuildPath(b, before, path);
+                var newType = MemberResolver.TypeOf(member);
+                var oldValue = Convert(oldAccess.Type, newType, oldAccess.Expression, 0);
+                if (oldValue == null) continue;
+                var sensitive = MemberResolver.IsSensitive(member) || path.Any(MemberResolver.IsSensitive);
+                var o = NewVariable();
+                var n = NewVariable();
+                w.Open(null);
+                w.Line("var " + o + " = " + oldValue + ";");
+                w.Line("var " + n + " = " + a + "." + Escape(member.Name) + ";");
+                var equal = ElementTypeOf(newType) != null && newType.SpecialType != SpecialType.System_String
+                    ? "(ReferenceEquals(" + o + ", " + n + ") || (" + o + " is not null && " + n + " is not null && global::System.Linq.Enumerable.SequenceEqual(" + o + ", " + n + ")))"
+                    : "global::System.Collections.Generic.EqualityComparer<" + T(newType) + ">.Default.Equals(" + o + ", " + n + ")";
+                w.Line("if (!" + equal + ") changes.Add(" + Create("\"" + member.Name + "\"", sensitive ? "\"***\"" : o, sensitive ? "\"***\"" : n) + ");");
+                w.Close();
+                RecordFlow(before, after, member.Name, member, path, new List<string> { "compared" + (sensitive ? " (values masked)" : string.Empty) });
+            }
+            w.Line("return changes;");
+        }
+
         // ------------------------------------------------------------------ [MapMergeKey] collection merges
 
         /// <summary>
@@ -700,6 +899,17 @@ namespace ConventionMapper.SourceGenerator
                 return;
             }
 
+            if (IsDiffMethod(method))
+            {
+                EmitDiff(method, w);
+                return;
+            }
+            if (HasAttribute(method, MapperGenerator.MapLogStringAttributeName))
+            {
+                EmitLogString(method, w);
+                return;
+            }
+
             var mergeKey = method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == MapperGenerator.MapMergeKeyAttributeName);
             if (mergeKey != null)
             {
@@ -720,6 +930,12 @@ namespace ConventionMapper.SourceGenerator
 
             var config = ReadConfig(method);
             var source = method.Parameters[0];
+            if (HasAttribute(method, MapperGenerator.MapRedactAttributeName))
+            {
+                if (!isCreate || !SymbolEqualityComparer.Default.Equals(source.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated), method.ReturnType.WithNullableAnnotation(NullableAnnotation.NotAnnotated)))
+                    Report(Diagnostics.InvalidValueAttribute, "MapRedact", method.Name, method.Name, "a redact method must be T Redact(T value)");
+                else config.Redact = true;
+            }
             // Extra parameters supply values for the destination members with the same name (or as [MapMember] sources).
             foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2))
             {
@@ -1158,6 +1374,8 @@ namespace ConventionMapper.SourceGenerator
                         var converted = access;
                         value = Traced(() => Convert(converted.Type, p.Type, converted.Expression, 0), out trace);
                         if (value != null) value = ApplyLength(value, path, p.Name, p.Type, destination, config, false, Describe(source, path, fromParameter));
+                        if (value != null && config.Redact)
+                            value = RedactValue(destination.GetMembers().FirstOrDefault(m => string.Equals(m.Name, p.Name, StringComparison.OrdinalIgnoreCase) && MemberResolver.IsSensitive(m)) ?? p, p.Type, value);
                     }
                     if (value == null)
                     {
@@ -1273,6 +1491,7 @@ namespace ConventionMapper.SourceGenerator
                 return null;
             }
             value = ApplyLength(value, path, destinationName, destinationType, owner, config, false, sourceName);
+            if (config.Redact) value = RedactValue(destinationMember, destinationType, value);
             if (access.MayBeNull && !AcceptsNull(destinationType))
                 Report(Diagnostics.NullableToNonNullable, sourceName, Short(owner) + "." + destinationName);
             if (fromParameter == ParameterMatch.Found) config.UsedParameters.Add(path[0].Name);
@@ -3098,6 +3317,9 @@ namespace ConventionMapper.SourceGenerator
             public Dictionary<string, IParameterSymbol> Parameters { get; } = new Dictionary<string, IParameterSymbol>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> UsedParameters { get; } = new HashSet<string>(StringComparer.Ordinal);
 
+            /// <summary>[MapRedact]: [Sensitive] members are masked, also in nested objects and collections.</summary>
+            public bool Redact { get; set; }
+
             /// <summary>[MapConstant]: destination member -> constant.</summary>
             public Dictionary<string, TypedConstant> Constants { get; } = new Dictionary<string, TypedConstant>(StringComparer.OrdinalIgnoreCase);
 
@@ -3177,9 +3399,9 @@ namespace ConventionMapper.SourceGenerator
             return this;
         }
 
-        public CodeWriter Open(string header)
+        public CodeWriter Open(string? header)
         {
-            Line(header);
+            if (header != null) Line(header);
             Line("{");
             _indent++;
             return this;

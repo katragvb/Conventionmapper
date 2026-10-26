@@ -29,6 +29,9 @@ namespace ConventionMapper.SourceGenerator
         public const string MapRequiredAttributeName = "ConventionMapper.MapRequiredAttribute";
         public const string MapTruncateAttributeName = "ConventionMapper.MapTruncateAttribute";
         public const string MapMergeKeyAttributeName = "ConventionMapper.MapMergeKeyAttribute";
+        public const string MapRedactAttributeName = "ConventionMapper.MapRedactAttribute";
+        public const string MapLogStringAttributeName = "ConventionMapper.MapLogStringAttribute";
+        public const string FieldChangeName = "ConventionMapper.FieldChange";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
@@ -355,6 +358,47 @@ namespace ConventionMapper
 
         /// <summary>Remove target items that have no source item with their key (default true).</summary>
         public bool RemoveMissing { get; set; } = true;
+    }
+    /// <summary>
+    /// Makes <c>T Redact(T value)</c> return a copy with every [Sensitive] member masked (strings become ""***"", other values
+    /// their default), including in nested objects and collections, for logging or support tools.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapRedactAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Makes <c>string ToLogString(T value)</c> write the value's members as text, ""Order { Id = 7, Ssn = *** }"", with every
+    /// [Sensitive] member masked, so objects can be logged without leaking personal data.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapLogStringAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>One member that differs, returned by a generated <c>IReadOnlyList&lt;FieldChange&gt; Diff(TBefore before, TAfter after)</c> method.</summary>
+    internal sealed class FieldChange
+    {
+        public FieldChange(string member, object? before, object? after)
+        {
+            Member = member;
+            Before = before;
+            After = after;
+        }
+
+        /// <summary>The member of the ""after"" type.</summary>
+        public string Member { get; }
+
+        /// <summary>The old value (""***"" for [Sensitive] members).</summary>
+        public object? Before { get; }
+
+        /// <summary>The new value (""***"" for [Sensitive] members).</summary>
+        public object? After { get; }
+
+        public override string ToString() => Member + "": "" + (Before ?? ""null"") + "" -> "" + (After ?? ""null"");
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>
