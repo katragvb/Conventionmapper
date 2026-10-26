@@ -24,6 +24,10 @@ namespace ConventionMapper.SourceGenerator
         public const string MapConversionAttributeName = "ConventionMapper.MapConversionAttribute";
         public const string MapInheritAttributeName = "ConventionMapper.MapInheritAttribute";
         public const string MapReviewedAttributeName = "ConventionMapper.MapReviewedAttribute";
+        public const string MapConstantAttributeName = "ConventionMapper.MapConstantAttribute";
+        public const string MapFromAttributeName = "ConventionMapper.MapFromAttribute";
+        public const string MapRequiredAttributeName = "ConventionMapper.MapRequiredAttribute";
+        public const string MapTruncateAttributeName = "ConventionMapper.MapTruncateAttribute";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
@@ -262,6 +266,73 @@ namespace ConventionMapper
         }
 
         public string[] Members { get; }
+    }
+    /// <summary>A constant for a destination member (or constructor parameter): <c>[MapConstant(""Status"", FormStatus.New)]</c>.</summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapConstantAttribute : global::System.Attribute
+    {
+        public MapConstantAttribute(string destination, object value)
+        {
+            Destination = destination;
+            Value = value;
+        }
+
+        public string Destination { get; }
+        public object Value { get; }
+    }
+
+    /// <summary>
+    /// Computes one destination member with a static method of the mapper class that takes the source (and, after it, any of
+    /// the mapping method's extra parameters by name): <c>[MapFrom(nameof(TruncateCity), ""City"")]</c>. In projections an
+    /// expression-bodied method is inlined, so it translates to SQL.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapFromAttribute : global::System.Attribute
+    {
+        public MapFromAttribute(string method, string destination)
+        {
+            Method = method;
+            Destination = destination;
+        }
+
+        public string Method { get; }
+        public string Destination { get; }
+    }
+
+    /// <summary>
+    /// The named destination members must have a value: when their source is null the mapping throws
+    /// InvalidOperationException naming the member, instead of writing a default.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapRequiredAttribute : global::System.Attribute
+    {
+        public MapRequiredAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
+    }
+
+    /// <summary>
+    /// Cuts a string to the destination's maximum length ([MaxLength], [StringLength] or the EF Core model), or to
+    /// <paramref name=""length""/> when given: <c>[MapTruncate(""City"")]</c>.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapTruncateAttribute : global::System.Attribute
+    {
+        public MapTruncateAttribute(string destination, int length = 0)
+        {
+            Destination = destination;
+            Length = length;
+        }
+
+        public string Destination { get; }
+        public int Length { get; }
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>

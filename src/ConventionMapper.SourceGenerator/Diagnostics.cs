@@ -117,6 +117,31 @@ namespace ConventionMapper.SourceGenerator
             "ConventionMapper.SourceGenerator {0} is running, but the project references {1}. Restart the IDE (or its C# language server) so it loads the new generator; until then the generated code is from the old version and can cause errors such as ambiguous calls.",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor InvalidValueAttribute = new DiagnosticDescriptor(
+            "CM0025", "Invalid member value attribute",
+            "[{0}] for '{1}' on '{2}': {3}",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor SuggestSensitive = new DiagnosticDescriptor(
+            "CM0026", "Member looks like personal data",
+            "'{0}' looks like personal data and is copied by a mapping; mark it [Sensitive] so it can only flow into protected members",
+            Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor PossibleTruncation = new DiagnosticDescriptor(
+            "CM0027", "String can be longer than the destination allows",
+            "'{0}' can be longer than {1} characters, the maximum of '{2}'. Cut it with [MapTruncate(\"{3}\")], or acknowledge it with [MapReviewed(\"{3}\")].",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor PossibleTruncationInfo = new DiagnosticDescriptor(
+            "CM0027", "String can be longer than the destination allows",
+            "'{0}' can be longer than {1} characters, the maximum of '{2}'. Cut it with [MapTruncate(\"{3}\")], or acknowledge it with [MapReviewed(\"{3}\")].",
+            Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor DatabaseGeneratedWrite = new DiagnosticDescriptor(
+            "CM0028", "Mapping writes a database-generated key or a navigation",
+            "'{0}' writes {1} '{2}' of the entity '{3}'. Copying it between rows is a common source of duplicate keys and accidental graph changes: leave it out with [MapIgnore(\"{2}\")], or acknowledge it with [MapReviewed(\"{2}\")].",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

@@ -467,7 +467,10 @@ public class PolicyRow { public int PolicyId { get; set; } public int CustomerId
             var result = Generate(EntityModels + @"
 [GeneratedMapper] public static partial class M { [MapIgnore(""Customer"")] public static partial Policy ToEntity(PolicyRow r); }");
 
-            AssertClean(result);
+            Assert.Empty(result.CompileErrors);
+            // PolicyId is the entity's single int key, so the database generates it: copying it is CM0028.
+            var generated = Assert.Single(result.WithId("CM0028"));
+            Assert.Contains("the database-generated key 'PolicyId'", generated.GetMessage());
             Assert.Contains("`Policy.PolicyId` (key)", result.Report);   // <Type>Id: primary key
             Assert.Contains("`Policy.CustomerId` (key)", result.Report); // <Navigation>Id: foreign key
             Assert.DoesNotContain("`Policy.ErrorObjectId` (key)", result.Report); // no ErrorObject navigation
@@ -491,7 +494,8 @@ public class PolicyRow { public int PolicyId { get; set; } public int CustomerId
 }");
 
             Assert.DoesNotContain("`Policy.PolicyId` (key)", result.Report);
-            Assert.Contains("| PolicyId | `PolicyId` | key (reviewed) |", result.Report);
+            Assert.Contains("| PolicyId | `PolicyId` | key (reviewed), generated key (reviewed) |", result.Report);
+            Assert.Empty(result.WithId("CM0028")); // the generated key is reviewed for the whole class
             var first = result.Report.Substring(result.Report.IndexOf("#### `ToEntity(PolicyRow)`", System.StringComparison.Ordinal));
             Assert.Contains("| CustomerId | `CustomerId` | key (reviewed) |", first.Substring(0, first.IndexOf("####", 5, System.StringComparison.Ordinal)));
             var inherited = result.Report.Substring(result.Report.IndexOf("#### `ToEntity(PolicyRow, int)`", System.StringComparison.Ordinal));
