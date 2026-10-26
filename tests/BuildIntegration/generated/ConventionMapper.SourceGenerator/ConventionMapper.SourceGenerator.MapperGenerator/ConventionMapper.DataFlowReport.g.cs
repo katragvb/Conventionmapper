@@ -46,6 +46,25 @@ Generated at build time by ConventionMapper.SourceGenerator: where every destina
 ",
             };
 
+        /// <summary>Every flow as CSV: Mapper, Method, SourceType, SourceMember, DestinationType, DestinationMember, Notes.</summary>
+        public const string Csv = @"Mapper,Method,SourceType,SourceMember,DestinationType,DestinationMember,Notes
+BuildIntegration.OrderMapper,ToDto(Order),Order,Id,OrderDto,Id,
+BuildIntegration.OrderMapper,ToDto(Order),Order,Name,OrderDto,Title,
+";
+
+        /// <summary>The report as JSON (an array with one object per mapper class), for tools such as a pull-request summary.</summary>
+        public const string Json = @"[{""mapper"":""BuildIntegration.OrderMapper"",""maps"":[{""map"":""ToDto(Order)"",""destination"":""OrderDto"",""members"":[{""member"":""Id"",""source"":""Id"",""notes"":""""},{""member"":""Title"",""source"":""Name"",""notes"":""""}]}],""unreadSourceMembers"":{}}]";
+
+        /// <summary>A Mermaid flowchart of source member → destination member, across all maps (chains show column → DTO → API lineage).</summary>
+        public const string Mermaid = @"flowchart LR
+    n0[""Order.Id""]
+    n1[""OrderDto.Id""]
+    n2[""Order.Name""]
+    n3[""OrderDto.Title""]
+    n0 --> n1
+    n2 --> n3
+";
+
         /// <summary>Set this environment variable to 1 to rewrite the snapshot files instead of failing.</summary>
         public const string UpdateVariable = "CONVENTIONMAPPER_UPDATE_SNAPSHOTS";
 
@@ -129,8 +148,14 @@ Generated at build time by ConventionMapper.SourceGenerator: where every destina
             if (Updating) return;
             failures.Add(!exists
                 ? "Created data-flow report " + file + ": review it and commit it."
-                : "Data-flow report changed: " + file + "\n" + Diff(actual!, expected) +
+                : "Data-flow report changed: " + file + "\n" + Summary(actual!, expected) + Diff(actual!, expected) +
                   "\nIf the change is intended, update the file (run the tests with " + UpdateVariable + "=1) and commit it.");
+        }
+
+        private static string Summary(string before, string after)
+        {
+            var changes = DescribeChanges(before, after);
+            return changes.Length == 0 ? "" : "Changes:\n" + changes + "\n\nDiff:\n";
         }
 
         private static string Normalize(string text)
@@ -173,6 +198,87 @@ Generated at build time by ConventionMapper.SourceGenerator: where every destina
             }
             if (endA < a.Length && shown < 200) sb.Append("  ").Append(a[endA]).Append('\n');
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// A plain-English summary of what changed between two reports: methods added or removed, members a map now also
+        /// writes, no longer writes or writes from another source, and members added to or removed from destination types
+        /// (API contract changes).
+        /// </summary>
+        public static string DescribeChanges(string before, string after)
+        {
+            var oldMaps = ParseMaps(before, out var oldTypes);
+            var newMaps = ParseMaps(after, out var newTypes);
+            var lines = new global::System.Collections.Generic.List<string>();
+            foreach (var map in newMaps.Keys)
+                if (!oldMaps.ContainsKey(map)) lines.Add("New map " + map);
+            foreach (var map in oldMaps.Keys)
+                if (!newMaps.ContainsKey(map)) lines.Add("Removed map " + map);
+            foreach (var pair in newMaps)
+            {
+                if (!oldMaps.TryGetValue(pair.Key, out var old)) continue;
+                var name = pair.Key.Split(' ')[0];
+                foreach (var member in pair.Value)
+                {
+                    var writes = member.Value.Key != "—";
+                    var wrote = old.TryGetValue(member.Key, out var previous) && previous.Key != "—";
+                    if (writes && !wrote) lines.Add(name + " now also writes " + member.Key + " (from " + member.Value.Key + ")");
+                    else if (!writes && wrote) lines.Add(name + " no longer writes " + member.Key + " (was " + previous.Key + ")");
+                    else if (writes && previous.Key != member.Value.Key) lines.Add(name + " now writes " + member.Key + " from " + member.Value.Key + " instead of " + previous.Key);
+                }
+                foreach (var member in old)
+                    if (member.Value.Key != "—" && !pair.Value.ContainsKey(member.Key)) lines.Add(name + " no longer writes " + member.Key + " (was " + member.Value.Key + ")");
+            }
+            foreach (var pair in newTypes)
+            {
+                if (!oldTypes.TryGetValue(pair.Key, out var old)) continue;
+                foreach (var member in pair.Value) if (!old.Contains(member)) lines.Add(pair.Key + " has a new member " + member);
+                foreach (var member in old) if (!pair.Value.Contains(member)) lines.Add(pair.Key + " lost the member " + member + " (API change)");
+            }
+            return string.Join("\n", global::System.Linq.Enumerable.Select(global::System.Linq.Enumerable.Distinct(lines), l => "- " + l));
+        }
+
+        /// <summary>"#### `Map(A)` → `B`" sections -> member -> (source, notes); destination type -> its members.</summary>
+        private static global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>> ParseMaps(
+            string markdown, out global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.HashSet<string>> types)
+        {
+            var maps = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>>(global::System.StringComparer.Ordinal);
+            types = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.HashSet<string>>(global::System.StringComparer.Ordinal);
+            global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>? current = null;
+            global::System.Collections.Generic.HashSet<string>? currentType = null;
+            foreach (var raw in markdown.Replace("\r\n", "\n").Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith("#### ", global::System.StringComparison.Ordinal))
+                {
+                    var heading = line.Substring(5).Replace("`", "");
+                    current = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.KeyValuePair<string, string>>(global::System.StringComparer.Ordinal);
+                    maps[heading] = current;
+                    var arrow = heading.LastIndexOf("→", global::System.StringComparison.Ordinal);
+                    var type = arrow >= 0 ? heading.Substring(arrow + 1).Trim() : heading;
+                    if (!types.TryGetValue(type, out currentType))
+                    {
+                        currentType = new global::System.Collections.Generic.HashSet<string>(global::System.StringComparer.Ordinal);
+                        types[type] = currentType;
+                    }
+                    continue;
+                }
+                if (line.StartsWith("#", global::System.StringComparison.Ordinal))
+                {
+                    current = null;
+                    currentType = null;
+                    continue;
+                }
+                if (current == null || !line.StartsWith("| ", global::System.StringComparison.Ordinal) || line.StartsWith("| ---", global::System.StringComparison.Ordinal) ||
+                    line.StartsWith("| Destination |", global::System.StringComparison.Ordinal)) continue;
+                var cells = line.Trim('|').Split('|');
+                if (cells.Length < 3) continue;
+                var member = cells[0].Trim().Replace(" (sensitive)", "").Replace(" (constructor)", "");
+                if (member.StartsWith("(", global::System.StringComparison.Ordinal)) continue;
+                current[member] = new global::System.Collections.Generic.KeyValuePair<string, string>(cells[1].Trim().Trim('`'), cells[2].Trim());
+                currentType!.Add(member);
+            }
+            return maps;
         }
 
         private static string Resolve(string path, string callerFilePath)

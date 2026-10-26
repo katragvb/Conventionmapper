@@ -150,6 +150,135 @@ namespace ConventionMapper
 
         public string[] Members { get; }
     }
+    /// <summary>A constant for a destination member (or constructor parameter): <c>[MapConstant("Status", FormStatus.New)]</c>.</summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapConstantAttribute : global::System.Attribute
+    {
+        public MapConstantAttribute(string destination, object value)
+        {
+            Destination = destination;
+            Value = value;
+        }
+
+        public string Destination { get; }
+        public object Value { get; }
+    }
+
+    /// <summary>
+    /// Computes one destination member with a static method of the mapper class that takes the source (and, after it, any of
+    /// the mapping method's extra parameters by name): <c>[MapFrom(nameof(TruncateCity), "City")]</c>. In projections an
+    /// expression-bodied method is inlined, so it translates to SQL.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapFromAttribute : global::System.Attribute
+    {
+        public MapFromAttribute(string method, string destination)
+        {
+            Method = method;
+            Destination = destination;
+        }
+
+        public string Method { get; }
+        public string Destination { get; }
+    }
+
+    /// <summary>
+    /// The named destination members must have a value: when their source is null the mapping throws
+    /// InvalidOperationException naming the member, instead of writing a default.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapRequiredAttribute : global::System.Attribute
+    {
+        public MapRequiredAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
+    }
+
+    /// <summary>
+    /// Cuts a string to the destination's maximum length ([MaxLength], [StringLength] or the EF Core model), or to
+    /// the given length: <c>[MapTruncate("City")]</c>, <c>[MapTruncate("City", 30)]</c>.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapTruncateAttribute : global::System.Attribute
+    {
+        public MapTruncateAttribute(string destination, int length = 0)
+        {
+            Destination = destination;
+            Length = length;
+        }
+
+        public string Destination { get; }
+        public int Length { get; }
+    }
+    /// <summary>
+    /// Makes <c>void Merge(IEnumerable&lt;TSource&gt; source, ICollection&lt;TTarget&gt; target)</c> merge by key: items whose key
+    /// matches are updated in place (with the mapper's Update(TSource, TTarget) method when it has one), new items are
+    /// added, and target items without a match are removed (unless <see cref="RemoveMissing"/> is false).
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapMergeKeyAttribute : global::System.Attribute
+    {
+        public MapMergeKeyAttribute(string sourceKey, string? targetKey = null)
+        {
+            SourceKey = sourceKey;
+            TargetKey = targetKey ?? sourceKey;
+        }
+
+        public string SourceKey { get; }
+        public string TargetKey { get; }
+
+        /// <summary>Remove target items that have no source item with their key (default true).</summary>
+        public bool RemoveMissing { get; set; } = true;
+    }
+    /// <summary>
+    /// Makes <c>T Redact(T value)</c> return a copy with every [Sensitive] member masked (strings become "***", other values
+    /// their default), including in nested objects and collections, for logging or support tools.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapRedactAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Makes <c>string ToLogString(T value)</c> write the value's members as text, "Order { Id = 7, Ssn = *** }", with every
+    /// [Sensitive] member masked, so objects can be logged without leaking personal data.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapLogStringAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>One member that differs, returned by a generated <c>IReadOnlyList&lt;FieldChange&gt; Diff(TBefore before, TAfter after)</c> method.</summary>
+    internal sealed class FieldChange
+    {
+        public FieldChange(string member, object? before, object? after)
+        {
+            Member = member;
+            Before = before;
+            After = after;
+        }
+
+        /// <summary>The member of the "after" type.</summary>
+        public string Member { get; }
+
+        /// <summary>The old value ("***" for [Sensitive] members).</summary>
+        public object? Before { get; }
+
+        /// <summary>The new value ("***" for [Sensitive] members).</summary>
+        public object? After { get; }
+
+        public override string ToString() => Member + ": " + (Before ?? "null") + " -> " + (After ?? "null");
+    }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>
     /// Marks a member that must never be copied into a destination member that is not also [Sensitive]

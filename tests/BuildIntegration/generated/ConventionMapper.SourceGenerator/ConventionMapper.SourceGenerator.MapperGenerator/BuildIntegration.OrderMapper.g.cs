@@ -50,5 +50,31 @@ namespace BuildIntegration
                 ? "No generated mapping method is named '" + method + "'."
                 : "No generated overload of '" + method + "' has these parameter types. Overloads: " + string.Join(", ", global::System.Linq.Enumerable.Where(WriteSets.Keys, k => k.StartsWith(method + "(", global::System.StringComparison.Ordinal))), nameof(method));
         }
+
+        /// <summary>For each generated mapping method (keys as in WriteSets): destination member -> the source member path it is copied from.</summary>
+        internal static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, global::System.Collections.Generic.IReadOnlyDictionary<string, string>> Lineage =
+            new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.IReadOnlyDictionary<string, string>>(global::System.StringComparer.Ordinal)
+            {
+                ["ToDto(Order)"] = new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal) { ["Id"] = "Id", ["Title"] = "Name" },
+                ["ToDto"] = new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal) { ["Id"] = "Id", ["Title"] = "Name" },
+            };
+
+        /// <summary>
+        /// For the generated method <paramref name="method"/>: destination member -> the source member path it is copied from.
+        /// Pass its parameter types when it has overloads: <c>LineageOf(nameof(ToDto), typeof(Order))</c>. Throws when no generated method matches.
+        /// </summary>
+        internal static global::System.Collections.Generic.IReadOnlyDictionary<string, string> LineageOf(string method, params global::System.Type[] parameterTypes)
+        {
+            var candidates = 0;
+            if (method == "ToDto")
+            {
+                candidates++;
+                if (parameterTypes.Length == 0 && Lineage.ContainsKey(method)) return Lineage[method];
+                if (parameterTypes.Length == 1 && parameterTypes[0] == typeof(global::BuildIntegration.Order)) return Lineage["ToDto(Order)"];
+            }
+            throw new global::System.ArgumentException(candidates == 0
+                ? "No generated mapping method is named '" + method + "'."
+                : "No generated overload of '" + method + "' has these parameter types. Overloads: " + string.Join(", ", global::System.Linq.Enumerable.Where(Lineage.Keys, k => k.StartsWith(method + "(", global::System.StringComparison.Ordinal))), nameof(method));
+        }
     }
 }

@@ -193,6 +193,16 @@ namespace ConventionMapper.Tests.TestingPackage
             MapperAssert.AllMappersMatchWriteSets(typeof(TbBroken), new SampleDataOptions().For<TbCode, string>(c => c.Code, n => n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         }
 
+        [Fact]
+        public void Utility_and_merge_methods_do_not_break_the_baseline()
+        {
+            // Diff and ToLogString write no destination: they have no write set.
+            Assert.DoesNotContain(Utility.UMapper.WriteSets.Keys, k => k.StartsWith("Diff", StringComparison.Ordinal) || k.StartsWith("PublicDiff", StringComparison.Ordinal) || k.StartsWith("ToLogString", StringComparison.Ordinal));
+            Assert.Contains(Utility.UMapper.WriteSets.Keys, k => k.StartsWith("Redact", StringComparison.Ordinal)); // a real copy
+            MapperAssert.AllMappersMatchWriteSets(typeof(Utility.UMapper));
+            MapperAssert.AllMappersMatchWriteSets(typeof(Merge.MMapper)); // merges are skipped, Update and ToCoverage run
+        }
+
         // ------------------------------------------------------------------ RoundTrips
 
         [Fact]

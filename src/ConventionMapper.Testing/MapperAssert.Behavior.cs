@@ -260,6 +260,8 @@ namespace ConventionMapper.Testing
                         continue;
                     }
                     destination = result;
+                    // A scalar or collection result (a conversion, a list of DTOs) has no members to compare; it ran without throwing.
+                    if (IsScalar(result) || result is IEnumerable) continue;
                     written = ChangedMembers(TryCreateEmpty(result.GetType()), result, result.GetType());
                 }
 

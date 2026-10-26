@@ -229,7 +229,7 @@ namespace ConventionMapper.Testing
         /// Stricter than <see cref="AllMethodsCovered"/>: every create and update method of <paramref name="mapperType"/> must
         /// run inside a <see cref="WritesExactly{TSource, TDestination}(Func{TSource, TDestination}, IEnumerable{string}, IEnumerable{string})"/>
         /// or <see cref="UpdatesExactly"/> check in <paramref name="testAssembly"/>, so a test that only calls a map without
-        /// asserting anything does not count. Projections (which those checks can't run) must be called at least.
+        /// asserting anything does not count. Projections and collection merges (which those checks can't run) must be called at least.
         /// </summary>
         public static void AllMethodsVerified(Type mapperType, Assembly testAssembly)
         {
@@ -242,9 +242,9 @@ namespace ConventionMapper.Testing
             var missing = new List<string>();
             foreach (var method in methods)
             {
-                if (IsProjection(method))
+                if (IsProjection(method) || IsMerge(method))
                 {
-                    if (!called.Contains(Key(method))) missing.Add("  " + Describe(method) + " (projection, never called)");
+                    if (!called.Contains(Key(method))) missing.Add("  " + Describe(method) + (IsMerge(method) ? " (merge, never called)" : " (projection, never called)"));
                 }
                 else if (!verified.Contains(Key(method)))
                 {
@@ -270,6 +270,15 @@ namespace ConventionMapper.Testing
             if (!returned.IsGenericType) return false;
             var definition = returned.GetGenericTypeDefinition();
             return definition == typeof(IQueryable<>) || definition == typeof(System.Linq.Expressions.Expression<>);
+        }
+
+        /// <summary>void Merge(IEnumerable&lt;S&gt;, ICollection&lt;T&gt;): a collection merge, which the write checks can't run.</summary>
+        private static bool IsMerge(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            return method.ReturnType == typeof(void) && parameters.Length >= 2 &&
+                   parameters[0].ParameterType != typeof(string) && typeof(IEnumerable).IsAssignableFrom(parameters[0].ParameterType) &&
+                   parameters[1].ParameterType != typeof(string) && typeof(IEnumerable).IsAssignableFrom(parameters[1].ParameterType);
         }
 
         internal static string Key(MethodBase method) => method.Module.ModuleVersionId.ToString("N") + ":" + method.MetadataToken.ToString("X8");

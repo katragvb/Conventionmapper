@@ -323,7 +323,7 @@ namespace ConventionMapper
 
     /// <summary>
     /// Cuts a string to the destination's maximum length ([MaxLength], [StringLength] or the EF Core model), or to
-    /// <paramref name=""length""/> when given: <c>[MapTruncate(""City"")]</c>.
+    /// the given length: <c>[MapTruncate(""City"")]</c>, <c>[MapTruncate(""City"", 30)]</c>.
     /// </summary>
     [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
     [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
