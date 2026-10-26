@@ -298,6 +298,30 @@ public class ImportData { public int LocationNumber { get; set; } public string 
         }
 
         [Fact]
+        public void A_parameter_overrides_an_inherited_ignore_but_not_the_methods_own()
+        {
+            var result = Generate(Usings + LocationModels + @"
+[GeneratedMapper] public static partial class M
+{
+    [MapIgnore(""GlClassCode""), MapIgnore(""Exposure""), MapIgnore(""Town""), MapIgnore(""Internal"")]
+    public static partial ImportData ToImportData(LocationData source);
+
+    [MapInherit(nameof(ToImportData))]
+    public static partial ImportData ToImportData(LocationData source, string? glClassCode, decimal? exposure);
+
+    [MapInherit(nameof(ToImportData))]
+    [MapIgnore(""GlClassCode"")]
+    public static partial ImportData WithOwnIgnore(LocationData source, string? glClassCode);
+}");
+
+            var overload = result.Source.Substring(result.Source.IndexOf("string? glClassCode, decimal? exposure)", System.StringComparison.Ordinal));
+            Assert.Contains("GlClassCode = glClassCode", overload);
+            Assert.Contains("Exposure = exposure", overload);
+            Assert.DoesNotContain("Town =", overload.Substring(0, overload.IndexOf("WithOwnIgnore", System.StringComparison.Ordinal)));
+            Assert.Single(result.WithId("CM0011"), d => d.GetMessage().Contains("'WithOwnIgnore'"));
+        }
+
+        [Fact]
         public void MapInherit_with_other_types_is_an_error()
         {
             var result = Generate(Usings + LocationModels + @"
