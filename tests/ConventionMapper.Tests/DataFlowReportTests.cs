@@ -58,7 +58,8 @@ namespace ConventionMapper.Tests
 
             Assert.StartsWith("# Data-flow report", report);
             Assert.Contains("## `ConventionMapper.Tests.FlowMapper`", report);
-            Assert.Contains("### `FlowCustomer` → `FlowCustomerDto`", report);
+            Assert.Contains("### ToDto", report);
+            Assert.Contains("#### `ToDto(FlowCustomer)` → `FlowCustomerDto`", report);
             Assert.Contains("| AddressCity | `Address.City` | flattened |", report);
             Assert.Contains("| Label | — | ignored |", report);
             Assert.Contains("| PasswordHash (sensitive) | `PasswordHash` | sensitive |", report);
