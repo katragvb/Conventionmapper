@@ -102,8 +102,10 @@ namespace ConventionMapper.Tests.Generated
     {
         public static partial GenProductDto ToDto(GenProduct product);
 
-        // Ordinary static methods are used for every member of these types.
+        // Static methods marked [MapConversion] are used for every member of these types.
+        [MapConversion]
         private static string Format(GenMoney money) => money.Amount.ToString("0.00", CultureInfo.InvariantCulture) + " " + money.Currency;
+        [MapConversion]
         private static string Format(decimal value) => value.ToString("0.000", CultureInfo.InvariantCulture);
     }
 
