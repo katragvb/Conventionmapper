@@ -336,15 +336,90 @@ namespace ConventionMapper.SourceGenerator
             }
             WriteSet(method);
 
+            ReportNameofCandidates(method);
             var w = new CodeWriter(_memberIndent);
             w.Open(Signature(method, syntax));
             EmitMethodBody(method, w);
             w.Close();
+            FlushUnmapped(method);
 
             // Optional XML docs listing where each member comes from (MSBuild: ConventionMapperGeneratedDocs=true).
             foreach (var line in MethodDocs(method, syntax)) output.Line(DocMarker + line);
             output.Raw(w.ToString());
             _rootSource = _rootDestination = null;
+        }
+
+        // ------------------------------------------------------------------ diagnostics with IDE fixes
+
+        private readonly List<KeyValuePair<string, object[]>> _pendingUnmapped = new List<KeyValuePair<string, object[]>>();
+        private bool _pendingExplicitMode;
+
+        /// <summary>
+        /// CM0001. For the method's own destination the diagnostic is created after the method is generated, with the
+        /// properties the IDE fixes need: the member, whether the method is in explicit mode, and the members it writes.
+        /// </summary>
+        private void ReportUnmapped(string member, ITypeSymbol owner, ITypeSymbol source, MemberConfig config)
+        {
+            var args = new object[] { member, Short(owner), Short(source) };
+            var isRoot = _rootDestination != null && _rootSource != null &&
+                         SymbolEqualityComparer.Default.Equals(owner, _rootDestination) && SymbolEqualityComparer.Default.Equals(source, _rootSource);
+            if (!isRoot)
+            {
+                Report(Diagnostics.UnmappedMember, args);
+                return;
+            }
+            _pendingExplicitMode = config.ExplicitMode;
+            _pendingUnmapped.Add(new KeyValuePair<string, object[]>(member, args));
+        }
+
+        private void FlushUnmapped(IMethodSymbol method)
+        {
+            if (_pendingUnmapped.Count == 0) return;
+            var mapped = string.Join(",", WriteSet(method));
+            foreach (var pending in _pendingUnmapped)
+            {
+                var properties = ImmutableDictionary<string, string?>.Empty
+                    .Add("Member", pending.Key)
+                    .Add("ExplicitMode", _pendingExplicitMode ? "true" : "false")
+                    .Add("Mapped", mapped);
+                _diagnostics.Add(Diagnostic.Create(Diagnostics.UnmappedMember, _location, properties, pending.Value));
+            }
+            _pendingUnmapped.Clear();
+        }
+
+        /// <summary>CM0020 (hidden): a string in a mapping attribute that names a destination member and could be nameof(...).</summary>
+        private void ReportNameofCandidates(IMethodSymbol method)
+        {
+            if (!TryGetMapTypes(method, out _, out var destinationType) || !(destinationType is INamedTypeSymbol destination) ||
+                destination.IsGenericType || destination.IsAnonymousType || !IsAccessible(destination)) return;
+            var members = GetWritableMembers(destination, false);
+            foreach (var attribute in method.GetAttributes())
+            {
+                var name = attribute.AttributeClass?.ToDisplayString();
+                int[]? positions;
+                if (name == MapperGenerator.MapExplicitAttributeName || name == MapperGenerator.MapAllowParseAttributeName) positions = null; // all
+                else if (name == MapperGenerator.MapIgnoreAttributeName || name == MapperGenerator.MapNullSubstituteAttributeName) positions = new[] { 0 };
+                else if (name == MapperGenerator.MapMemberAttributeName) positions = new[] { 1 };
+                else continue;
+
+                if (!(attribute.ApplicationSyntaxReference?.GetSyntax(_ct) is AttributeSyntax syntax) || syntax.ArgumentList == null) continue;
+                var arguments = syntax.ArgumentList.Arguments;
+                for (var i = 0; i < arguments.Count; i++)
+                {
+                    if (positions != null && Array.IndexOf(positions, i) < 0) continue;
+                    if (arguments[i].NameEquals != null || arguments[i].NameColon != null) continue;
+                    if (!(arguments[i].Expression is LiteralExpressionSyntax literal) || !literal.IsKind(SyntaxKind.StringLiteralExpression)) continue;
+                    var text = literal.Token.ValueText;
+                    var member = members.FirstOrDefault(m => string.Equals(m.Name, text, StringComparison.Ordinal)) ??
+                                 members.FirstOrDefault(m => string.Equals(m.Name, text, StringComparison.OrdinalIgnoreCase));
+                    if (member == null || !IsAccessible(member)) continue;
+                    var properties = ImmutableDictionary<string, string?>.Empty
+                        .Add("Type", T(destination))
+                        .Add("Member", member.Name);
+                    _diagnostics.Add(Diagnostic.Create(Diagnostics.UseNameof, literal.GetLocation(), properties,
+                        Short(destination) + "." + member.Name, text));
+                }
+            }
         }
 
         /// <summary>Doc lines carry this prefix; the generator turns them into "///" comments or drops them, per the MSBuild option.</summary>
@@ -430,7 +505,12 @@ namespace ConventionMapper.SourceGenerator
             var config = ReadConfig(method);
             var source = method.Parameters[0];
             // Extra parameters supply values for the destination members with the same name (or as [MapMember] sources).
-            foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2)) config.Parameters[extra.Name] = extra;
+            foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2))
+            {
+                config.Parameters[extra.Name] = extra;
+                // An overload that takes the value overrides an inherited [MapIgnore] for it.
+                if (!config.OwnIgnored.Contains(extra.Name)) config.Ignored.Remove(extra.Name);
+            }
             if (isCreate)
             {
                 EmitCreateBody(w, source.Type, method.ReturnType, Escape(source.Name), config, isRoot: true);
@@ -473,6 +553,7 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>Applies the inherited method's configuration first ([MapInherit]), then this method's own attributes over it.</summary>
         private void ReadMethodConfig(IMethodSymbol method, MemberConfig config, HashSet<IMethodSymbol> chain)
         {
+            var own = chain.Count == 1; // the method being generated, not one it inherits from
             var attributes = method.GetAttributes();
             foreach (var attribute in attributes)
             {
@@ -494,7 +575,10 @@ namespace ConventionMapper.SourceGenerator
                 var name = attribute.AttributeClass?.ToDisplayString();
                 var args = attribute.ConstructorArguments;
                 if (name == MapperGenerator.MapIgnoreAttributeName && args.Length == 1 && args[0].Value is string ignored)
+                {
                     config.Ignored.Add(ignored);
+                    if (own) config.OwnIgnored.Add(ignored);
+                }
                 else if (name == MapperGenerator.MapMemberAttributeName && args.Length == 2 && args[0].Value is string from && args[1].Value is string to)
                     config.Explicit[to] = from;
                 else if (name == MapperGenerator.MapNullSubstituteAttributeName && args.Length == 2 && args[0].Value is string target)
@@ -851,7 +935,7 @@ namespace ConventionMapper.SourceGenerator
                 path = FindConventionPath(source, destinationName, owner, out var ambiguous);
                 if (path == null)
                 {
-                    if (!ambiguous) Report(Diagnostics.UnmappedMember, destinationName, Short(owner), Short(source));
+                    if (!ambiguous) ReportUnmapped(destinationName, owner, source, config);
                     return null;
                 }
             }
@@ -1542,7 +1626,7 @@ namespace ConventionMapper.SourceGenerator
                 path = FindConventionPath(source, name, owner, out var ambiguous);
                 if (path == null)
                 {
-                    if (!ambiguous) Report(Diagnostics.UnmappedMember, name, Short(owner), Short(source));
+                    if (!ambiguous) ReportUnmapped(name, owner, source, config);
                     return null;
                 }
             }
@@ -2008,6 +2092,9 @@ namespace ConventionMapper.SourceGenerator
             public static readonly MemberConfig Empty = new MemberConfig();
 
             public HashSet<string> Ignored { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapIgnore] on the method itself (not inherited through [MapInherit]).</summary>
+            public HashSet<string> OwnIgnored { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, string> Explicit { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>[MapExplicit]: only listed, [MapMember] and parameter-supplied members are set.</summary>

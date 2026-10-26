@@ -17,6 +17,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{8166F631-617
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConventionMapper.Testing", "src\ConventionMapper.Testing\ConventionMapper.Testing.csproj", "{07B1D01F-CF2E-4712-A134-6CD06FBFB21E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConventionMapper.SourceGenerator.CodeFixes", "src\ConventionMapper.SourceGenerator.CodeFixes\ConventionMapper.SourceGenerator.CodeFixes.csproj", "{CF922815-6139-4C08-84F6-1948AEA759ED}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -47,11 +49,16 @@ Global
 		{07B1D01F-CF2E-4712-A134-6CD06FBFB21E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{07B1D01F-CF2E-4712-A134-6CD06FBFB21E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{07B1D01F-CF2E-4712-A134-6CD06FBFB21E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CF922815-6139-4C08-84F6-1948AEA759ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CF922815-6139-4C08-84F6-1948AEA759ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CF922815-6139-4C08-84F6-1948AEA759ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CF922815-6139-4C08-84F6-1948AEA759ED}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{07B1D01F-CF2E-4712-A134-6CD06FBFB21E} = {8166F631-6177-41BC-A479-87827228D1C8}
+		{CF922815-6139-4C08-84F6-1948AEA759ED} = {8166F631-6177-41BC-A479-87827228D1C8}
 	EndGlobalSection
 EndGlobal

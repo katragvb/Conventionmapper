@@ -25,6 +25,7 @@
     <!-- IDE code fixes and refactorings are tested in a Roslyn workspace -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
     <ProjectReference Include="..\..\src\ConventionMapper.CodeFixes\ConventionMapper.CodeFixes.csproj" />
+    <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator.CodeFixes\ConventionMapper.SourceGenerator.CodeFixes.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

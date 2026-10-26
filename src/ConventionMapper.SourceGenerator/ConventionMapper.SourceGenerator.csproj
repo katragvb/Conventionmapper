@@ -42,6 +42,12 @@
     <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- IDE fixes for the generator's diagnostics (CM0001, CM0020, CM0023), shipped next to the generator. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ConventionMapper.SourceGenerator.CodeFixes\ConventionMapper.SourceGenerator.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\ConventionMapper.SourceGenerator.CodeFixes\bin\$(Configuration)\netstandard2.0\ConventionMapper.SourceGenerator.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="README.md" Pack="true" PackagePath="\" />
