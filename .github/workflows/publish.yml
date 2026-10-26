@@ -2,7 +2,7 @@ name: build-and-publish
 
 on:
   push:
-    branches: [ main, 'feature/**' ]
+    branches: [ main, 'feature/**', 'fix/**' ]
     tags: [ 'v*' ]          # push tag v1.2.3 to publish 1.2.3 to nuget.org
   pull_request:
 

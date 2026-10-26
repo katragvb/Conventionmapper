@@ -277,6 +277,90 @@ public class Data { public int CreateUserId { get; set; } public string CreateUs
             Assert.Contains("author.Name", result.Source);
         }
 
+        // ------------------------------------------------------------ name collisions between source members and parameters
+
+        private const string CollisionModels = @"
+using ConventionMapper;
+public class Customer { public string Name { get; set; } = """"; }
+public class Policy { public int Count { get; set; } }
+public class Row { public int CreateUser { get; set; } public string Status { get; set; } = """"; public Customer Customer { get; set; } = new Customer(); }
+";
+
+        [Fact]
+        public void Dotted_MapMember_path_matching_a_source_member_and_a_parameter_is_an_error()
+        {
+            var result = Generate(CollisionModels + @"
+public class Data { public string CustomerName { get; set; } = """"; }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""Customer.Name"", ""CustomerName"")]
+    public static partial Data Map(Row row, Customer customer);
+}");
+
+            Assert.Single(result.Generator, d => d.Id == "CM0014");
+        }
+
+        [Fact]
+        public void Ambiguous_constructor_parameter_source_is_reported_once()
+        {
+            var result = Generate(CollisionModels + @"
+public record Data(int CreateUserId);
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""CreateUser"", ""CreateUserId"")]
+    public static partial Data Map(Row row, string createUser);
+}");
+
+            Assert.Single(result.Generator, d => d.Id == "CM0014");
+            Assert.DoesNotContain("int.Parse", result.Source);
+        }
+
+        [Fact]
+        public void MapMember_from_the_source_wins_over_a_parameter_named_like_the_destination()
+        {
+            var result = Generate(CollisionModels + @"
+public class Data { public string Status { get; set; } = """"; public int CreateUser { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapMember(""Customer.Name"", ""Status"")]
+    public static partial Data Map(Row row, string status);
+}");
+
+            Assert.Contains("Status = row.Customer", result.Source);
+            Assert.DoesNotContain("Status = status", result.Source);
+            Assert.Contains(result.Generator, d => d.Id == "CM0011" && d.GetMessage().Contains("status"));
+        }
+
+        [Fact]
+        public void A_parameter_named_like_the_destination_sets_it_even_when_the_source_has_that_member()
+        {
+            var result = Generate(CollisionModels + @"
+public class Data { public string Status { get; set; } = """"; public int CreateUser { get; set; } }
+[GeneratedMapper] public static partial class M { public static partial Data Map(Row row, string status); }");
+
+            Assert.Contains("Status = status", result.Source);
+            Assert.Contains("CreateUser = row.CreateUser", result.Source);
+            Assert.Empty(result.Generator.Where(d => d.Severity >= DiagnosticSeverity.Warning));
+            Assert.Empty(result.CompileErrors);
+        }
+
+        [Fact]
+        public void Path_through_a_nullable_parameter_is_null_safe()
+        {
+            var result = Generate(CollisionModels + @"
+public class Data { public int? Count { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapExplicit]
+    [MapMember(""policy.Count"", ""Count"")]
+    public static partial Data Map(Row row, Policy? policy);
+}");
+
+            Assert.Contains("policy?.Count", result.Source);
+            Assert.Empty(result.Generator.Where(d => d.Severity >= DiagnosticSeverity.Warning));
+            Assert.Empty(result.CompileErrors);
+        }
+
         [Fact]
         public void Explicit_mode_needs_no_ignores_and_checks_listed_names()
         {
