@@ -75,7 +75,6 @@
             Log.LogError(null, "CM0100", null, Destination, 0, 0, 0, 0,
                 "The generated mapping code committed in " + Destination + " is out of date (" + string.Join(", ", problems) +
                 "). Build locally (outside CI) to update it, and commit the result.");
-        return !Log.HasLoggedErrors;
       ]]></Code>
     </Task>
   </UsingTask>
