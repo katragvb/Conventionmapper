@@ -75,5 +75,6 @@ public static partial class OrderMapper
 
     public static partial OrderSummary ToSummary(Order order);
 
+    [MapConversion]
     private static string Format(Money money) => money.Amount.ToString("0.00", CultureInfo.InvariantCulture) + " " + money.Currency;
 }
