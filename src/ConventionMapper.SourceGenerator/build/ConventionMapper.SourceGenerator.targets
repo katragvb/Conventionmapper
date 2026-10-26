@@ -25,6 +25,9 @@
 
   <ItemGroup Condition="'$(ConventionMapperEmitGeneratedCode)' != ''">
     <Compile Remove="$(_ConventionMapperGeneratedFolder)**/*.cs" />
+    <!-- The committed copy is for review only: keep it out of SonarQube/SonarCloud analysis. -->
+    <None Update="$(_ConventionMapperGeneratedFolder)**" SonarQubeExclude="true" />
+    <Content Update="$(_ConventionMapperGeneratedFolder)**" SonarQubeExclude="true" />
   </ItemGroup>
 
   <Target Name="ConventionMapperSyncGeneratedCode"

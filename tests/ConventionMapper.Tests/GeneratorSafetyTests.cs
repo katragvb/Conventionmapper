@@ -692,7 +692,8 @@ public class OrderDto { public int Id { get; set; } }
 
             var remarks = lines.IndexOf("/// <remarks>Hand-written remarks.</remarks>");
             Assert.True(remarks >= 0);
-            Assert.StartsWith("public static partial global::OrderDto Copy(", lines[remarks + 1]); // no generated remarks added
+            Assert.StartsWith("[global::System.CodeDom.Compiler.GeneratedCode(", lines[remarks + 1]);
+            Assert.StartsWith("public static partial global::OrderDto Copy(", lines[remarks + 2]); // no generated remarks added
         }
 
         // ------------------------------------------------------------------ CM0021 / CM0022 projections

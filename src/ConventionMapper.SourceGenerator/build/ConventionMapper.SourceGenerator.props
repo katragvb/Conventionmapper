@@ -11,5 +11,6 @@
   <ItemGroup>
     <CompilerVisibleProperty Include="ConventionMapperGeneratedDocs" />
     <CompilerVisibleProperty Include="ConventionMapperSourceGeneratorVersion" />
+    <CompilerVisibleProperty Include="ConventionMapperExcludeFromCodeCoverage" />
   </ItemGroup>
 </Project>

@@ -60,11 +60,23 @@ namespace ConventionMapper.SourceGenerator
                 options.GlobalOptions.TryGetValue("build_property.ConventionMapperGeneratedDocs", out var value) &&
                 string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase));
 
-            context.RegisterSourceOutput(mappers.Combine(docs), static (spc, pair) =>
+            // Generated members get [GeneratedCode], and [ExcludeFromCodeCoverage] unless
+            // <ConventionMapperExcludeFromCodeCoverage>false</ConventionMapperExcludeFromCodeCoverage> (when the target framework has them).
+            var excludeCoverage = context.AnalyzerConfigOptionsProvider.Select(static (options, _) =>
+                !(options.GlobalOptions.TryGetValue("build_property.ConventionMapperExcludeFromCodeCoverage", out var value) &&
+                  string.Equals(value?.Trim(), "false", StringComparison.OrdinalIgnoreCase)));
+            var attributes = context.CompilationProvider.Select(static (compilation, _) =>
+                (compilation.GetTypeByMetadataName("System.CodeDom.Compiler.GeneratedCodeAttribute") != null,
+                 compilation.GetTypeByMetadataName("System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverageAttribute") != null));
+            var memberOptions = excludeCoverage.Combine(attributes).Select(static (pair, _) =>
+                new MemberAttributes(pair.Right.Item1, pair.Left && pair.Right.Item2));
+
+            context.RegisterSourceOutput(mappers.Combine(docs).Combine(memberOptions), static (spc, pair) =>
             {
-                var result = pair.Left;
+                var result = pair.Left.Left;
                 foreach (var diagnostic in result.Diagnostics) spc.ReportDiagnostic(diagnostic);
-                if (result.Source != null) spc.AddSource(result.HintName, Text(ApplyDocs(result.Source, pair.Right)));
+                if (result.Source != null)
+                    spc.AddSource(result.HintName, Text(ApplyMemberAttributes(ApplyDocs(result.Source, pair.Left.Right), pair.Right)));
             });
 
             // One data-flow report per assembly, with a section per mapper class.
@@ -108,6 +120,45 @@ namespace ConventionMapper.SourceGenerator
             var version = attribute?.InformationalVersion ?? string.Empty;
             var plus = version.IndexOf('+');
             return plus >= 0 ? version.Substring(0, plus) : version;
+        }
+
+        /// <summary>Which attributes generated members get.</summary>
+        internal readonly struct MemberAttributes : IEquatable<MemberAttributes>
+        {
+            public MemberAttributes(bool generatedCode, bool excludeFromCoverage)
+            {
+                GeneratedCode = generatedCode;
+                ExcludeFromCoverage = excludeFromCoverage;
+            }
+
+            public bool GeneratedCode { get; }
+            public bool ExcludeFromCoverage { get; }
+            public bool Equals(MemberAttributes other) => GeneratedCode == other.GeneratedCode && ExcludeFromCoverage == other.ExcludeFromCoverage;
+            public override bool Equals(object? obj) => obj is MemberAttributes other && Equals(other);
+            public override int GetHashCode() => (GeneratedCode ? 1 : 0) + (ExcludeFromCoverage ? 2 : 0);
+        }
+
+        /// <summary>Replaces the emitter's member markers with [GeneratedCode] and [ExcludeFromCodeCoverage], or removes them.</summary>
+        internal static string ApplyMemberAttributes(string source, MemberAttributes options)
+        {
+            if (source.IndexOf(MapperEmitter.MemberMarker, StringComparison.Ordinal) < 0) return source;
+            var attribute = (options.GeneratedCode ? "[global::System.CodeDom.Compiler.GeneratedCode(\"ConventionMapper.SourceGenerator\", \"" + RunningVersion() + "\")]" : string.Empty) +
+                            (options.ExcludeFromCoverage ? "[global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]" : string.Empty);
+            var lines = source.Split('\n');
+            var sb = new StringBuilder(source.Length);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                var marker = line.IndexOf(MapperEmitter.MemberMarker, StringComparison.Ordinal);
+                if (marker >= 0)
+                {
+                    if (attribute.Length == 0) continue;
+                    line = line.Substring(0, marker) + attribute;
+                }
+                sb.Append(line);
+                if (i < lines.Length - 1) sb.Append('\n');
+            }
+            return sb.ToString();
         }
 
         /// <summary>Turns the emitter's doc markers into "///" lines, or removes them.</summary>

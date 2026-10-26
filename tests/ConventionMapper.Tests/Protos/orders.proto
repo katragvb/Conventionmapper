@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package conventionmapper.tests;
+
+option csharp_namespace = "ConventionMapper.Tests.Proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+
+enum OrderState {
+  ORDER_STATE_UNKNOWN = 0;
+  ORDER_STATE_OPEN = 1;
+  ORDER_STATE_SHIPPED = 2;
+}
+
+message LineMessage {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+message OrderMessage {
+  int32 id = 1;
+  string customer = 2;
+  google.protobuf.Timestamp placed_at = 3;
+  google.protobuf.Duration handling = 4;
+  google.protobuf.StringValue note = 5;
+  google.protobuf.Int32Value priority = 6;
+  repeated LineMessage lines = 7;
+  repeated string tags = 8;
+  map<string, int32> counts = 9;
+  bytes signature = 10;
+  oneof contact {
+    string email = 11;
+    string phone = 12;
+  }
+}

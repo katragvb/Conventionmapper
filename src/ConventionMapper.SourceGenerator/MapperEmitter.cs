@@ -22,7 +22,7 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>Types in expressions (new, casts, typeof) and cache keys: no nullable reference modifier.</summary>
         private static readonly SymbolDisplayFormat TypeFormat = SymbolDisplayFormat.FullyQualifiedFormat;
 
-        private enum CollectionKind { None, Array, List, HashSet, Dictionary }
+        private enum CollectionKind { None, Array, List, HashSet, Dictionary, ImmutableArray, ImmutableList, ImmutableHashSet, ImmutableDictionary, FrozenSet, FrozenDictionary }
 
         private readonly INamedTypeSymbol _mapper;
         private readonly CSharpCompilation _compilation;
@@ -162,6 +162,23 @@ namespace ConventionMapper.SourceGenerator
                 }
                 else if (_requireMapConversion) continue;
                 RegisterUserMap(method, overwrite: true);
+            }
+
+            // [MapUse(typeof(SharedMappings))]: public static mapping methods of other classes, for pairs this mapper doesn't cover.
+            foreach (var attribute in _mapper.GetAttributes().Where(a => a.AttributeClass?.ToDisplayString() == MapperGenerator.MapUseAttributeName))
+            {
+                if (attribute.ConstructorArguments.Length != 1 || !(attribute.ConstructorArguments[0].Value is INamedTypeSymbol shared)) continue;
+                var found = 0;
+                foreach (var candidate in shared.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (candidate.MethodKind != MethodKind.Ordinary || !IsConversionShape(candidate) || !IsAccessible(candidate)) continue;
+                    found++;
+                    var pairKey = PairKey(candidate.Parameters[0].Type, candidate.ReturnType);
+                    if (!_userMaps.ContainsKey(pairKey)) _userMaps[pairKey] = candidate;
+                }
+                if (found == 0)
+                    ReportAt(Diagnostics.InvalidValueAttribute, AttributeLocation(attribute), "MapUse", shared.Name, _mapper.Name,
+                        Short(shared) + " has no accessible static method that maps one type to another");
             }
 
             var hasNamespace = !_mapper.ContainingNamespace.IsGlobalNamespace;
@@ -393,7 +410,8 @@ namespace ConventionMapper.SourceGenerator
             foreach (var pair in _conversionUses.OrderBy(p => p.Key.Name, StringComparer.Ordinal))
             {
                 var method = pair.Key;
-                if (_markedConversions.Contains(method) || IsPartialDefinition(method) || pair.Value.Count == 0) continue;
+                if (_markedConversions.Contains(method) || IsPartialDefinition(method) || pair.Value.Count == 0 ||
+                    !SymbolEqualityComparer.Default.Equals(method.ContainingType, _mapper)) continue;
                 var members = pair.Value.Take(3).Select(m => "'" + m + "'").ToList();
                 var more = pair.Value.Count > 3 ? " and " + (pair.Value.Count - 3).ToString(CultureInfo.InvariantCulture) + " more" : string.Empty;
                 _diagnostics.Add(Diagnostic.Create(Diagnostics.UnmarkedConversionMethod,
@@ -457,7 +475,7 @@ namespace ConventionMapper.SourceGenerator
 
             ReportNameofCandidates(method);
             var w = new CodeWriter(_memberIndent);
-            w.Open(Signature(method, syntax));
+            w.Member(Signature(method, syntax));
             EmitMethodBody(method, w);
             w.Close();
             FlushUnmapped(method);
@@ -513,7 +531,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static " + T(type) + " " + name + "(" + T(type) + " value)");
+            w.Member("private static " + T(type) + " " + name + "(" + T(type) + " value)");
             EmitCreateBody(w, type, type, "value", new MemberConfig { Redact = true });
             w.Close();
             _helpers.Append(w.ToString());
@@ -558,7 +576,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static string " + name + "(" + T(type) + "? value, int depth)");
+            w.Member("private static string " + name + "(" + T(type) + "? value, int depth)");
             w.Line("if (value is null) return \"null\";");
             w.Line("if (depth > 3) return \"" + Short(type) + " { ... }\";");
             w.Line("var sb = new global::System.Text.StringBuilder();");
@@ -587,6 +605,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
+            w.Line(MemberMarker);
             w.Line("private static global::System.Text.StringBuilder " + name + "(global::System.Text.StringBuilder sb, object? value) =>");
             w.Indent();
             w.Line("value is null ? sb.Append(\"null\") : value is global::System.IFormattable f ? sb.Append(f.ToString(null, global::System.Globalization.CultureInfo.InvariantCulture)) : sb.Append(value);");
@@ -777,7 +796,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static void " + name + "(" + T(source) + " source, " + T(target) + " target)");
+            w.Member("private static void " + name + "(" + T(source) + " source, " + T(target) + " target)");
             EmitUpdateBody(w, source, target, "source", "target", MemberConfig.Empty, name);
             w.Close();
             _helpers.Append(w.ToString());
@@ -860,6 +879,9 @@ namespace ConventionMapper.SourceGenerator
 
         /// <summary>Doc lines carry this prefix; the generator turns them into "///" comments or drops them, per the MSBuild option.</summary>
         internal const string DocMarker = "//#cm-doc ";
+
+        /// <summary>Before each generated method and class; the generator turns it into [GeneratedCode] and [ExcludeFromCodeCoverage].</summary>
+        internal const string MemberMarker = "//#cm-member";
 
         /// <summary>
         /// Docs for the implementation part. The implementation's docs replace the declaration's in the compiler output,
@@ -1329,14 +1351,22 @@ namespace ConventionMapper.SourceGenerator
                     continue;
                 }
                 var condition = WhenCondition(member.Name, source, src, config, projection: false);
+                _guardNulls = NeedsProtobufGuard(destination, member);
+                _patchGuard = null;
                 var value = MapMember(source, src, member, destination, config);
+                _guardNulls = false;
                 _rowNotes = null;
+                var guard = _patchGuard;
+                _patchGuard = null;
                 if (value == null) continue;
-                if (condition == null) assignments.Add(Escape(member.Name) + " = " + value);
+                if (guard != null) conditional.Add("if (" + guard + (condition != null ? " && " + condition : string.Empty) + ") __result." + Escape(member.Name) + " = " + value + ";");
+                else if (condition == null) assignments.Add(Escape(member.Name) + " = " + value);
                 else if (member is IPropertySymbol { SetMethod: { IsInitOnly: true } } || destination.IsValueType)
                     assignments.Add(Escape(member.Name) + " = " + condition + " ? " + value + " : default(" + T(MemberResolver.TypeOf(member)) + ")!");
                 else conditional.Add("if (" + condition + ") __result." + Escape(member.Name) + " = " + value + ";");
             }
+
+            conditional.AddRange(FillCollections(source, src, destination, "__result", config, update: false));
 
             var creation = "new " + T(destination) + "(" + string.Join(", ", arguments) + ")";
             var prefix = conditional.Count == 0 ? "return " : "var __result = ";
@@ -1474,7 +1504,7 @@ namespace ConventionMapper.SourceGenerator
 
             var cw = new CodeWriter(_memberIndent);
             cw.Line();
-            cw.Open("private sealed class " + name + " : global::System.Collections.Generic.IEqualityComparer<" + T(type) + ">");
+            cw.Member("private sealed class " + name + " : global::System.Collections.Generic.IEqualityComparer<" + T(type) + ">");
             cw.Line("public static readonly " + name + " Instance = new " + name + "();");
             cw.Open("public bool Equals(" + parameterType + " x, " + parameterType + " y)");
             if (reference)
@@ -1504,10 +1534,11 @@ namespace ConventionMapper.SourceGenerator
             {
                 var kind = GetCollectionKind(type);
                 var elementComparer = MemberComparer(element).Comparer;
-                if (kind == CollectionKind.Dictionary && element is INamedTypeSymbol pair && pair.TypeArguments.Length == 2)
+                if ((kind == CollectionKind.Dictionary || kind == CollectionKind.ImmutableDictionary || kind == CollectionKind.FrozenDictionary) &&
+                    element is INamedTypeSymbol pair && pair.TypeArguments.Length == 2)
                     return (EqualityRuntime() + ".PairComparer<" + T(pair.TypeArguments[0]) + ", " + T(pair.TypeArguments[1]) + ">(" +
                             MemberComparer(pair.TypeArguments[1]).Comparer + ")", "set");
-                return (elementComparer, kind == CollectionKind.HashSet ? "set" : "sequence");
+                return (elementComparer, kind == CollectionKind.HashSet || kind == CollectionKind.ImmutableHashSet || kind == CollectionKind.FrozenSet ? "set" : "sequence");
             }
             var plain = type.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
             if (IsObjectLike(plain, false)) return (EqualityHelper(plain) + ".Instance", "object");
@@ -1523,7 +1554,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static class " + name);
+            w.Member("private static class " + name);
             w.Open("public static bool SequenceEqual<T>(global::System.Collections.Generic.IEnumerable<T>? x, global::System.Collections.Generic.IEnumerable<T>? y, global::System.Collections.Generic.IEqualityComparer<T> comparer)");
             w.Line("if (ReferenceEquals(x, y)) return true;");
             w.Line("if (x is null || y is null) return false;");
@@ -1676,7 +1707,7 @@ namespace ConventionMapper.SourceGenerator
 
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static void " + name + "(" + T(type) + " value, string prefix, " + ProblemList + " problems, int depth)");
+            w.Member("private static void " + name + "(" + T(type) + " value, string prefix, " + ProblemList + " problems, int depth)");
             w.Line("if (depth > 8) return;");
             foreach (var line in lines) w.Line(line);
             w.Close();
@@ -1871,7 +1902,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static class " + name);
+            w.Member("private static class " + name);
             w.Open("public static int Ordinal(global::System.Data.IDataRecord row, string column, string member)");
             w.Open("for (var i = 0; i < row.FieldCount; i++)");
             w.Line("if (string.Equals(row.GetName(i), column, global::System.StringComparison.OrdinalIgnoreCase)) return i;");
@@ -2102,7 +2133,9 @@ namespace ConventionMapper.SourceGenerator
                 }
                 var condition = WhenCondition(member.Name, source, src, config, projection: false);
                 _patchGuard = null;
+                _guardNulls = NeedsProtobufGuard(named, member);
                 var value = MapMember(source, src, member, named, config);
+                _guardNulls = false;
                 _rowNotes = null;
                 var guard = _patchGuard;
                 _patchGuard = null;
@@ -2113,7 +2146,133 @@ namespace ConventionMapper.SourceGenerator
                 else if (condition != null) w.Line("if (" + condition + ") " + assignment);
                 else w.Line(assignment);
             }
+            foreach (var line in FillCollections(source, src, named, dest, config, update: true)) w.Line(line);
         }
+
+        // ------------------------------------------------------------------ read-only collection members, Protobuf
+
+        /// <summary>Set while mapping a member whose null source must not be assigned (Protobuf strings, bytes and oneof members).</summary>
+        private bool _guardNulls;
+
+        /// <summary>
+        /// Get-only collection members with an Add method (Protobuf repeated and map fields, "List&lt;T&gt; Items { get; } = new()"):
+        /// the source items are added to the existing collection; an update clears it first.
+        /// </summary>
+        private List<string> FillCollections(ITypeSymbol source, string src, INamedTypeSymbol destination, string target, MemberConfig config, bool update)
+        {
+            var lines = new List<string>();
+            var writable = new HashSet<string>(GetWritableMembers(destination, false).Select(m => m.Name), StringComparer.Ordinal);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in SelfAndBases(destination).SelectMany(t => t.GetMembers()).OfType<IPropertySymbol>())
+            {
+                if (property.IsStatic || property.IsIndexer || property.GetMethod == null || !IsAccessible(property.GetMethod) || writable.Contains(property.Name)) continue;
+                if (!seen.Add(property.Name) || config.Ignored.Contains(property.Name) || !config.Includes(property.Name)) continue;
+                var collection = property.Type;
+                var element = ElementTypeOf(collection);
+                if (element == null || collection.SpecialType == SpecialType.System_String || collection is IArrayTypeSymbol) continue;
+                var pair = element is INamedTypeSymbol kv && kv.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.KeyValuePair<TKey, TValue>" ? kv : null;
+                var add = collection.GetMembers("Add").OfType<IMethodSymbol>().Concat(collection.AllInterfaces.SelectMany(i => i.GetMembers("Add").OfType<IMethodSymbol>()))
+                    .FirstOrDefault(m => !m.IsStatic && (pair != null ? m.Parameters.Length == 2 : m.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, element)));
+                if (add == null) continue;
+                var path = config.Explicit.TryGetValue(property.Name, out var explicitPath)
+                    ? _resolver.FindExplicitPath(source, explicitPath)
+                    : FindConventionPath(source, property.Name, destination, out _);
+                if (path == null) continue; // nothing to add: the collection keeps what the constructor put in it
+                var access = BuildPath(src, source, path);
+                var sourceElement = ElementTypeOf(access.Type);
+                if (sourceElement == null || access.Type.SpecialType == SpecialType.System_String) continue;
+                string? body;
+                if (pair != null)
+                {
+                    if (!(sourceElement is INamedTypeSymbol sourcePair) || sourcePair.TypeArguments.Length != 2) continue;
+                    var k = Convert(sourcePair.TypeArguments[0], pair.TypeArguments[0], "item.Key", 1);
+                    var v = Convert(sourcePair.TypeArguments[1], pair.TypeArguments[1], "item.Value", 1);
+                    body = k == null || v == null ? null : "{0}.Add(" + k + ", " + v + ");";
+                }
+                else
+                {
+                    var item = Convert(sourceElement, element, "item", 1);
+                    body = item == null ? null : "{0}.Add(" + item + ");";
+                }
+                if (body == null)
+                {
+                    Report(Diagnostics.IncompatibleTypes, Describe(source, path, ParameterMatch.None), Short(access.Type), Short(destination) + "." + property.Name, Short(collection), property.Name);
+                    continue;
+                }
+                var clear = update && collection.GetMembers("Clear").OfType<IMethodSymbol>().Concat(collection.AllInterfaces.SelectMany(i => i.GetMembers("Clear").OfType<IMethodSymbol>()))
+                    .Any(m => !m.IsStatic && m.Parameters.Length == 0);
+                // Pattern variables of an if condition stay in scope for the rest of the block, so each gets its own name.
+                var s = NewVariable();
+                var d = NewVariable();
+                lines.Add("if (" + access.Expression + " is { } " + s + " && " + target + "." + Escape(property.Name) + " is { } " + d + ") { " +
+                          (clear ? d + ".Clear(); " : string.Empty) + "foreach (var item in " + s + ") " + body.Replace("{0}", d) + " }");
+                RecordFlow(source, destination, property.Name, property, path, new List<string> { "added to the existing collection" });
+            }
+            return lines;
+        }
+
+        private static bool IsProtobufMessage(ITypeSymbol type) => type.AllInterfaces.Any(i => i.ToDisplayString() == "Google.Protobuf.IMessage");
+
+        /// <summary>
+        /// Protobuf setters throw on null strings and bytes, and setting a oneof member selects that case, so these members are
+        /// only assigned when the source has a value.
+        /// </summary>
+        private static bool NeedsProtobufGuard(ITypeSymbol owner, ISymbol member)
+        {
+            if (!IsProtobufMessage(owner)) return false;
+            var type = MemberResolver.TypeOf(member);
+            if (type.SpecialType == SpecialType.System_String || type.ToDisplayString() == "Google.Protobuf.ByteString") return true;
+            return owner.GetTypeMembers().Any(t => t.TypeKind == TypeKind.Enum && t.Name.EndsWith("OneofCase", StringComparison.Ordinal) &&
+                                                  member.Name != "None" && t.GetMembers(member.Name).Any());
+        }
+
+        /// <summary>Protobuf well-known types: Timestamp, Duration and ByteString to and from their .NET counterparts.</summary>
+        private string? ProtobufConvert(ITypeSymbol s, ITypeSymbol d, string expr)
+        {
+            var sName = (MemberResolver.IsNullableValueType(s, out var su) ? su : s).ToDisplayString();
+            var dIsNullable = MemberResolver.IsNullableValueType(d, out var du);
+            var dName = (dIsNullable ? du : d).ToDisplayString();
+            const string wkt = "Google.Protobuf.WellKnownTypes.";
+            var sNullable = s.IsReferenceType || MemberResolver.IsNullableValueType(s, out _);
+            string FromProto(string method, string valueType) =>
+                dIsNullable ? "(" + expr + ")?." + method + "()" : "((" + expr + ")?." + method + "() ?? default(" + valueType + "))";
+            string ToProto(string factory)
+            {
+                if (!sNullable) return factory.Replace("{0}", expr);
+                var v = NewVariable();
+                return "(" + expr + " is { } " + v + " ? " + factory.Replace("{0}", v) + " : null)";
+            }
+            if (sName == wkt + "Timestamp" && dName == "System.DateTime") return FromProto("ToDateTime", "global::System.DateTime");
+            if (sName == wkt + "Timestamp" && dName == "System.DateTimeOffset") return FromProto("ToDateTimeOffset", "global::System.DateTimeOffset");
+            if (sName == wkt + "Duration" && dName == "System.TimeSpan") return FromProto("ToTimeSpan", "global::System.TimeSpan");
+            if (dName == wkt + "Timestamp" && sName == "System.DateTime") return ToProto("global::Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(" + UtcHelper() + "({0}))");
+            if (dName == wkt + "Timestamp" && sName == "System.DateTimeOffset") return ToProto("global::Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset({0})");
+            if (dName == wkt + "Duration" && sName == "System.TimeSpan") return ToProto("global::Google.Protobuf.WellKnownTypes.Duration.FromTimeSpan({0})");
+            if (sName == "Google.Protobuf.ByteString" && d is IArrayTypeSymbol bytes && bytes.ElementType.SpecialType == SpecialType.System_Byte)
+                return "(" + expr + ")?.ToByteArray()";
+            if (dName == "Google.Protobuf.ByteString" && s is IArrayTypeSymbol source && source.ElementType.SpecialType == SpecialType.System_Byte)
+                return "(" + expr + " is null ? global::Google.Protobuf.ByteString.Empty : global::Google.Protobuf.ByteString.CopyFrom(" + expr + "))";
+            return null;
+        }
+
+        /// <summary>Timestamp.FromDateTime needs a UTC DateTime: local times are converted, unspecified ones are taken as UTC.</summary>
+        private string UtcHelper()
+        {
+            const string key = "helper:utc";
+            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            var name = "__Utc";
+            _helperNames[key] = name;
+            var w = new CodeWriter(_memberIndent);
+            w.Line();
+            w.Line(MemberMarker);
+            w.Line("private static global::System.DateTime " + name + "(global::System.DateTime value) =>");
+            w.Indent();
+            w.Line("value.Kind == global::System.DateTimeKind.Utc ? value : value.Kind == global::System.DateTimeKind.Local ? value.ToUniversalTime() : global::System.DateTime.SpecifyKind(value, global::System.DateTimeKind.Utc);");
+            w.Outdent();
+            _helpers.Append(w.ToString());
+            return name;
+        }
+
 
         private IMethodSymbol? ChooseConstructor(ITypeSymbol source, INamedTypeSymbol destination, string src, MemberConfig config,
             out List<string> arguments, out HashSet<string> consumed)
@@ -2304,7 +2463,7 @@ namespace ConventionMapper.SourceGenerator
             var access = fromParameter == ParameterMatch.Found ? parameterAccess : BuildPath(src, source, path);
             access = ApplyRequired(access, destinationName, owner, sourceName, config, projection: false);
             access = ApplyNullSubstitute(access, destinationName, destinationType, config);
-            if (config.Patch) access = ApplyPatch(access, destinationName);
+            if (config.Patch || _guardNulls) access = ApplyPatch(access, destinationName);
             _checkedMember = config.Checked.Contains(destinationName) || _classChecked.Contains(destinationName)
                 ? (_current?.Name ?? "Map") + ": " + Short(owner) + "." + destinationName : null;
             var value = config.Format.TryGetValue(destinationName, out var format)
@@ -2565,6 +2724,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
+            w.Line(MemberMarker);
             w.Line("private static string? " + name + "(string? value, int length) =>");
             w.Indent();
             w.Line("value is null || value.Length <= length ? value : value.Substring(0, length);");
@@ -2825,7 +2985,7 @@ namespace ConventionMapper.SourceGenerator
                 !(_preserve && IsPartialDefinition(userMethod) && (IsObjectLike(d, false) || ElementTypeOf(d) != null)))
             {
                 _trace?.Methods.Add(userMethod);
-                return Escape(userMethod.Name) + "(" + expr + ")";
+                return CallName(userMethod) + "(" + expr + ")";
             }
 
             if (same)
@@ -2840,6 +3000,7 @@ namespace ConventionMapper.SourceGenerator
 
             var conversion = _compilation.ClassifyConversion(s, d);
             if (conversion.Exists && conversion.IsImplicit) return expr;
+            if (ProtobufConvert(s, d, expr) is string proto) return proto;
 
             var sIsNullable = MemberResolver.IsNullableValueType(s, out var sUnderlying);
             var dIsNullable = MemberResolver.IsNullableValueType(d, out var dUnderlying);
@@ -2921,6 +3082,10 @@ namespace ConventionMapper.SourceGenerator
 
         private void AddRisk(string conversion) => _trace?.Risks.Add(conversion);
 
+        /// <summary>A mapping method's name as a call: plain for this mapper's methods, qualified for [MapUse] classes.</summary>
+        private string CallName(IMethodSymbol method) =>
+            SymbolEqualityComparer.Default.Equals(method.ContainingType, _mapper) ? Escape(method.Name) : T(method.ContainingType) + "." + Escape(method.Name);
+
         private static bool IsFormatProvider(ITypeSymbol type) => type.Name == "IFormatProvider" && type.ContainingNamespace?.ToDisplayString() == "System";
 
         /// <summary>Has ToString(IFormatProvider): numbers, dates and the like, whose text depends on the culture.</summary>
@@ -2946,7 +3111,7 @@ namespace ConventionMapper.SourceGenerator
                 target.GetMembers("ParseExact").OfType<IMethodSymbol>().Any(m => m.IsStatic && m.Parameters.Length == 3 &&
                     m.Parameters[0].Type.SpecialType == SpecialType.System_String && m.Parameters[1].Type.SpecialType == SpecialType.System_String))
             {
-                AddRisk(Short(target) + ".ParseExact");
+                // [MapFormat] states the expected format, so ParseExact is intended (no CM0016).
                 var parse = T(target) + ".ParseExact(" + access.Expression + ", " + literal + ", " + invariant + ")";
                 return MemberResolver.IsNullableValueType(destinationType, out _)
                     ? "(" + access.Expression + " is null ? default(" + T(destinationType) + ") : " + parse + ")"
@@ -2969,7 +3134,7 @@ namespace ConventionMapper.SourceGenerator
             var d = T(destination);
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static " + d + " " + name + "(" + s + " value, string member)");
+            w.Member("private static " + d + " " + name + "(" + s + " value, string member)");
             var dName = destination.ToDisplayString();
             string Fail(string why) => "throw new global::System.OverflowException(member + \": \" + global::System.Convert.ToString(value, global::System.Globalization.CultureInfo.InvariantCulture) + \" " + why + "\");";
             if (dName == "System.DateOnly")
@@ -3043,7 +3208,7 @@ namespace ConventionMapper.SourceGenerator
 
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static " + T(destination) + " " + name + "(" + T(source) + " source" + ReferencesParameter + ")");
+            w.Member("private static " + T(destination) + " " + name + "(" + T(source) + " source" + ReferencesParameter + ")");
             if (_preserve) EmitReferenceBody(w, source, destination, "source", MemberConfig.Empty, declareReferences: false);
             else EmitCreateBody(w, source, destination, "source", MemberConfig.Empty);
             w.Close();
@@ -3120,7 +3285,7 @@ namespace ConventionMapper.SourceGenerator
             _helperNames[key] = name;
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private sealed class " + name + " : global::System.Collections.Generic.IEqualityComparer<object>");
+            w.Member("private sealed class " + name + " : global::System.Collections.Generic.IEqualityComparer<object>");
             w.Line("public static readonly " + name + " Instance = new " + name + "();");
             w.Line("bool global::System.Collections.Generic.IEqualityComparer<object>.Equals(object? x, object? y) => ReferenceEquals(x, y);");
             w.Line("int global::System.Collections.Generic.IEqualityComparer<object>.GetHashCode(object obj) => global::System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);");
@@ -3138,7 +3303,7 @@ namespace ConventionMapper.SourceGenerator
 
             var w = new CodeWriter(_memberIndent);
             w.Line();
-            w.Open("private static " + T(destination) + " " + name + "(" + T(source) + " value)");
+            w.Member("private static " + T(destination) + " " + name + "(" + T(source) + " value)");
             if (HasFlags(source) || HasFlags(destination))
             {
                 // [Flags] combinations have no single name: convert through the numeric value.
@@ -3189,29 +3354,34 @@ namespace ConventionMapper.SourceGenerator
 
         private string? BuildCollectionHelper(ITypeSymbol source, ITypeSymbol destination, ITypeSymbol sourceElement, CollectionKind kind, int depth, string key)
         {
-
             var w = new CodeWriter(_memberIndent);
             var sourceDefinition = source is INamedTypeSymbol sn ? sn.OriginalDefinition.ToDisplayString() : string.Empty;
             var isArraySource = source is IArrayTypeSymbol;
-            var indexable = isArraySource || sourceDefinition == "System.Collections.Generic.List<T>" ||
+            var isImmutableArraySource = sourceDefinition == "System.Collections.Immutable.ImmutableArray<T>";
+            var isListSource = sourceDefinition == "System.Collections.Generic.List<T>";
+            var indexable = isArraySource || isImmutableArraySource || isListSource ||
                             sourceDefinition == "System.Collections.Generic.IList<T>" || sourceDefinition == "System.Collections.Generic.IReadOnlyList<T>";
             var countable = indexable || sourceDefinition == "System.Collections.Generic.ICollection<T>" ||
                             sourceDefinition == "System.Collections.Generic.IReadOnlyCollection<T>" || sourceDefinition == "System.Collections.Generic.HashSet<T>" ||
                             sourceDefinition == "System.Collections.Generic.Dictionary<TKey, TValue>" ||
                             sourceDefinition == "System.Collections.Generic.IDictionary<TKey, TValue>" ||
-                            sourceDefinition == "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>";
-            var count = isArraySource ? "source.Length" : countable ? "source.Count" : null;
+                            sourceDefinition == "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>" ||
+                            sourceDefinition == "System.Collections.Immutable.ImmutableList<T>" ||
+                            sourceDefinition == "System.Collections.Immutable.ImmutableHashSet<T>";
+            var count = isArraySource || isImmutableArraySource ? "source.Length" : countable ? "source.Count" : null;
+            // A default ImmutableArray has no items to enumerate; treat it like null.
+            var nullTest = source.IsReferenceType ? "source is null" : isImmutableArraySource ? "source.IsDefault" : null;
             var name = NewHelperName(_deepCopy ? "CloneCollection" : "MapCollection", source, destination);
 
             w.Line();
-            w.Open("private static " + T(destination) + " " + name + "(" + T(source) + " source" + ReferencesParameter + ")");
+            w.Member("private static " + T(destination) + " " + name + "(" + T(source) + " source" + ReferencesParameter + ")");
             // [MapPreserveReferences]: a collection reached twice maps to one collection.
             var trackCollection = _preserve && source.IsReferenceType;
             var register = trackCollection ? " __refs[source] = result;" : string.Empty;
             if (trackCollection)
                 w.Line("if (source is not null && __refs.TryGetValue(source, out var __existing)) return (" + T(destination) + ")__existing;");
 
-            if (kind == CollectionKind.Dictionary)
+            if (kind == CollectionKind.Dictionary || kind == CollectionKind.ImmutableDictionary || kind == CollectionKind.FrozenDictionary)
             {
                 var d = (INamedTypeSymbol)destination;
                 if (!(sourceElement is INamedTypeSymbol pair) || pair.OriginalDefinition.ToDisplayString() != "System.Collections.Generic.KeyValuePair<TKey, TValue>")
@@ -3219,11 +3389,29 @@ namespace ConventionMapper.SourceGenerator
                 var keyValue = Convert(pair.TypeArguments[0], d.TypeArguments[0], "item.Key", depth + 1);
                 var valueValue = Convert(pair.TypeArguments[1], d.TypeArguments[1], "item.Value", depth + 1);
                 if (keyValue == null || valueValue == null) return null;
-                var dictionary = "global::System.Collections.Generic.Dictionary<" + T(d.TypeArguments[0]) + ", " + T(d.TypeArguments[1]) + ">";
-                if (source.IsReferenceType) w.Line("if (source is null) return new " + dictionary + "();");
-                w.Line("var result = new " + dictionary + "(" + (count ?? string.Empty) + ");" + register);
-                w.Line("foreach (var item in source) result[" + keyValue + "] = " + valueValue + ";");
-                w.Line("return result;");
+                var arguments = T(d.TypeArguments[0]) + ", " + T(d.TypeArguments[1]);
+                var dictionary = "global::System.Collections.Generic.Dictionary<" + arguments + ">";
+                switch (kind)
+                {
+                    case CollectionKind.ImmutableDictionary:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return global::System.Collections.Immutable.ImmutableDictionary<" + arguments + ">.Empty;");
+                        w.Line("var result = global::System.Collections.Immutable.ImmutableDictionary.CreateBuilder<" + arguments + ">();");
+                        w.Line("foreach (var item in source) result[" + keyValue + "] = " + valueValue + ";");
+                        w.Line("return result.ToImmutable();");
+                        break;
+                    case CollectionKind.FrozenDictionary:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return global::System.Collections.Frozen.FrozenDictionary<" + arguments + ">.Empty;");
+                        w.Line("var result = new " + dictionary + "(" + (count ?? string.Empty) + ");");
+                        w.Line("foreach (var item in source) result[" + keyValue + "] = " + valueValue + ";");
+                        w.Line("return global::System.Collections.Frozen.FrozenDictionary.ToFrozenDictionary(result);");
+                        break;
+                    default:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return new " + dictionary + "();");
+                        w.Line("var result = new " + dictionary + "(" + (count ?? string.Empty) + ");" + register);
+                        w.Line("foreach (var item in source) result[" + keyValue + "] = " + valueValue + ";");
+                        w.Line("return result;");
+                        break;
+                }
             }
             else
             {
@@ -3234,48 +3422,81 @@ namespace ConventionMapper.SourceGenerator
                 var list = "global::System.Collections.Generic.List<" + elementType + ">";
                 var set = "global::System.Collections.Generic.HashSet<" + elementType + ">";
 
-                if (kind == CollectionKind.Array)
+                // Writes "body" (which uses "item") for each source item: a span over a List<T> on .NET 5+, an indexed loop
+                // for lists and arrays, foreach otherwise.
+                void ForEach(string body)
                 {
-                    if (source.IsReferenceType) w.Line("if (source is null) return global::System.Array.Empty<" + elementType + ">();");
-                    if (indexable && !(destinationElement is IArrayTypeSymbol))
+                    if (isListSource)
                     {
-                        w.Line("var result = new " + elementType + "[" + count + "];" + register);
-                        w.Open("for (var i = 0; i < result.Length; i++)");
-                        w.Line("var item = source[i];");
-                        w.Line("result[i] = " + element + ";");
-                        w.Close();
+                        w.Raw("#if NET5_0_OR_GREATER\n");
+                        w.Line("foreach (var item in global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan(source)) " + body);
+                        w.Raw("#else\n");
+                        w.Line("for (var i = 0; i < source.Count; i++) { var item = source[i]; " + body + " }");
+                        w.Raw("#endif\n");
+                    }
+                    else if (indexable) w.Line("for (var i = 0; i < " + count + "; i++) { var item = source[i]; " + body + " }");
+                    else w.Line("foreach (var item in source) " + body);
+                }
+
+                switch (kind)
+                {
+                    case CollectionKind.Array:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return global::System.Array.Empty<" + elementType + ">();");
+                        if (count != null && !(destinationElement is IArrayTypeSymbol))
+                        {
+                            // The size is known: fill the array directly, without a list and ToArray().
+                            w.Line("var result = new " + elementType + "[" + count + "];" + register);
+                            if (indexable) w.Line("for (var i = 0; i < result.Length; i++) { var item = source[i]; result[i] = " + element + "; }");
+                            else
+                            {
+                                w.Line("var index = 0;");
+                                w.Line("foreach (var item in source) result[index++] = " + element + ";");
+                            }
+                            w.Line("return result;");
+                        }
+                        else
+                        {
+                            w.Line("var result = new " + list + "();");
+                            w.Line("foreach (var item in source) result.Add(" + element + ");");
+                            w.Line("return result.ToArray();");
+                        }
+                        break;
+                    case CollectionKind.HashSet:
+                    case CollectionKind.FrozenSet:
+                        if (nullTest != null)
+                            w.Line("if (" + nullTest + ") return " + (kind == CollectionKind.FrozenSet ? "global::System.Collections.Frozen.FrozenSet<" + elementType + ">.Empty" : "new " + set + "()") + ";");
+                        if (count != null)
+                        {
+                            w.Raw("#if NETCOREAPP2_0_OR_GREATER || NET472_OR_GREATER || NETSTANDARD2_1_OR_GREATER\n");
+                            w.Line("var result = new " + set + "(" + count + ");" + (kind == CollectionKind.HashSet ? register : string.Empty));
+                            w.Raw("#else\n");
+                            w.Line("var result = new " + set + "();" + (kind == CollectionKind.HashSet ? register : string.Empty));
+                            w.Raw("#endif\n");
+                        }
+                        else w.Line("var result = new " + set + "();" + (kind == CollectionKind.HashSet ? register : string.Empty));
+                        ForEach("result.Add(" + element + ");");
+                        w.Line(kind == CollectionKind.FrozenSet ? "return global::System.Collections.Frozen.FrozenSet.ToFrozenSet(result);" : "return result;");
+                        break;
+                    case CollectionKind.ImmutableArray:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return global::System.Collections.Immutable.ImmutableArray<" + elementType + ">.Empty;");
+                        w.Line("var result = global::System.Collections.Immutable.ImmutableArray.CreateBuilder<" + elementType + ">(" + (count ?? string.Empty) + ");");
+                        ForEach("result.Add(" + element + ");");
+                        w.Line(count != null ? "return result.MoveToImmutable();" : "return result.ToImmutable();");
+                        break;
+                    case CollectionKind.ImmutableList:
+                    case CollectionKind.ImmutableHashSet:
+                        var immutable = kind == CollectionKind.ImmutableList ? "ImmutableList" : "ImmutableHashSet";
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return global::System.Collections.Immutable." + immutable + "<" + elementType + ">.Empty;");
+                        w.Line("var result = global::System.Collections.Immutable." + immutable + ".CreateBuilder<" + elementType + ">();");
+                        ForEach("result.Add(" + element + ");");
+                        w.Line("return result.ToImmutable();");
+                        break;
+                    default:
+                        if (nullTest != null) w.Line("if (" + nullTest + ") return new " + list + "();");
+                        w.Line("var result = new " + list + "(" + (count ?? string.Empty) + ");" + register);
+                        ForEach("result.Add(" + element + ");");
                         w.Line("return result;");
-                    }
-                    else
-                    {
-                        w.Line("var result = new " + list + "(" + (count ?? string.Empty) + ");");
-                        w.Line("foreach (var item in source) result.Add(" + element + ");");
-                        w.Line("return result.ToArray();");
-                    }
-                }
-                else if (kind == CollectionKind.HashSet)
-                {
-                    if (source.IsReferenceType) w.Line("if (source is null) return new " + set + "();");
-                    w.Line("var result = new " + set + "();" + register);
-                    w.Line("foreach (var item in source) result.Add(" + element + ");");
-                    w.Line("return result;");
-                }
-                else
-                {
-                    if (source.IsReferenceType) w.Line("if (source is null) return new " + list + "();");
-                    w.Line("var result = new " + list + "(" + (count ?? string.Empty) + ");" + register);
-                    if (indexable)
-                    {
-                        w.Open("for (var i = 0; i < " + count + "; i++)");
-                        w.Line("var item = source[i];");
-                        w.Line("result.Add(" + element + ");");
-                        w.Close();
-                    }
-                    else
-                    {
-                        w.Line("foreach (var item in source) result.Add(" + element + ");");
-                    }
-                    w.Line("return result;");
+                        break;
                 }
             }
 
@@ -3361,6 +3582,15 @@ namespace ConventionMapper.SourceGenerator
                 helper.Indent();
                 helper.Line(x + " => " + body + ";");
                 helper.Outdent();
+                // The expression itself, for composing with other queries, OData or specifications: ProjectToDtoExpression.
+                var property = method.Name + "Expression";
+                if (isQueryable && _mapper.GetMembers(property).IsEmpty && _projectionProperties.Add(property))
+                {
+                    var access = method.DeclaredAccessibility == Accessibility.Public ? "public" : "internal";
+                    helper.Line();
+                    helper.Line("/// <summary>The expression <see cref=\"" + Escape(method.Name) + "\"/> applies, for composing with other queries.</summary>");
+                    helper.Line(access + " static " + expressionType + " " + property + " => " + field + ";");
+                }
                 _helpers.Append(helper.ToString());
                 expression = field;
             }
@@ -3374,6 +3604,8 @@ namespace ConventionMapper.SourceGenerator
                 ? "return global::System.Linq.Queryable.Select(" + Escape(method.Parameters[0].Name) + ", " + expression + ");"
                 : "return " + expression + ";");
         }
+
+        private readonly HashSet<string> _projectionProperties = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>A projection's extra parameter as the source of a member: by the member's name, or a [MapMember] path starting with it.</summary>
         private string? ProjectionParameter(string name, ITypeSymbol destinationType, ISymbol destinationSymbol, ITypeSymbol source, ITypeSymbol owner,
@@ -3716,6 +3948,21 @@ namespace ConventionMapper.SourceGenerator
                 case "System.Collections.Generic.IDictionary<TKey, TValue>":
                 case "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>":
                     return CollectionKind.Dictionary;
+                case "System.Collections.Immutable.ImmutableArray<T>":
+                    return CollectionKind.ImmutableArray;
+                case "System.Collections.Immutable.ImmutableList<T>":
+                case "System.Collections.Immutable.IImmutableList<T>":
+                    return CollectionKind.ImmutableList;
+                case "System.Collections.Immutable.ImmutableHashSet<T>":
+                case "System.Collections.Immutable.IImmutableSet<T>":
+                    return CollectionKind.ImmutableHashSet;
+                case "System.Collections.Immutable.ImmutableDictionary<TKey, TValue>":
+                case "System.Collections.Immutable.IImmutableDictionary<TKey, TValue>":
+                    return CollectionKind.ImmutableDictionary;
+                case "System.Collections.Frozen.FrozenSet<T>":
+                    return CollectionKind.FrozenSet;
+                case "System.Collections.Frozen.FrozenDictionary<TKey, TValue>":
+                    return CollectionKind.FrozenDictionary;
                 default:
                     return CollectionKind.None;
             }
@@ -4582,6 +4829,13 @@ namespace ConventionMapper.SourceGenerator
             if (text.Length > 0) _sb.Append(' ', _indent * 4).Append(text);
             _sb.Append('\n');
             return this;
+        }
+
+        /// <summary>A generated member: the attribute marker, then the declaration and its opening brace.</summary>
+        public CodeWriter Member(string declaration)
+        {
+            Line(MapperEmitter.MemberMarker);
+            return Open(declaration);
         }
 
         public CodeWriter Open(string? header)
