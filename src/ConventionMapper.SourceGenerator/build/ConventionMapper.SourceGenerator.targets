@@ -1,0 +1,82 @@
+<Project>
+  <!--
+    Keep the generated mapping code in the repository so reviewers see code diffs in pull requests:
+
+      <ConventionMapperEmitGeneratedCode>Generated</ConventionMapperEmitGeneratedCode>
+
+    Local builds copy ConventionMapper's generated files into that folder (relative to the project). CI builds
+    (ContinuousIntegrationBuild, CI=true or TF_BUILD) instead fail with CM0100 when the committed copy is out of date.
+    Override with <ConventionMapperCheckGeneratedCode>true|false</ConventionMapperCheckGeneratedCode>.
+    The folder is excluded from compilation; the compiler still uses the generator's output.
+  -->
+  <PropertyGroup Condition="'$(ConventionMapperEmitGeneratedCode)' != ''">
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath Condition="'$(CompilerGeneratedFilesOutputPath)' == ''">$(IntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+    <_ConventionMapperGeneratedFolder>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(ConventionMapperEmitGeneratedCode)'))</_ConventionMapperGeneratedFolder>
+    <ConventionMapperCheckGeneratedCode Condition="'$(ConventionMapperCheckGeneratedCode)' == '' and ('$(ContinuousIntegrationBuild)' == 'true' or '$(CI)' == 'true' or '$(TF_BUILD)' == 'True')">true</ConventionMapperCheckGeneratedCode>
+    <ConventionMapperCheckGeneratedCode Condition="'$(ConventionMapperCheckGeneratedCode)' == ''">false</ConventionMapperCheckGeneratedCode>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(ConventionMapperEmitGeneratedCode)' != ''">
+    <Compile Remove="$(_ConventionMapperGeneratedFolder)**/*.cs" />
+  </ItemGroup>
+
+  <Target Name="ConventionMapperSyncGeneratedCode"
+          AfterTargets="CoreCompile"
+          Condition="'$(ConventionMapperEmitGeneratedCode)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_ConventionMapperGeneratedSource>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(CompilerGeneratedFilesOutputPath)', 'ConventionMapper.SourceGenerator', 'ConventionMapper.SourceGenerator.MapperGenerator'))</_ConventionMapperGeneratedSource>
+      <!-- Multi-targeted projects get a folder per target framework: the generated code can differ between them. -->
+      <_ConventionMapperGeneratedTarget>$(_ConventionMapperGeneratedFolder)</_ConventionMapperGeneratedTarget>
+      <_ConventionMapperGeneratedTarget Condition="$(TargetFrameworks.Contains(';'))">$([MSBuild]::NormalizeDirectory('$(_ConventionMapperGeneratedFolder)', '$(TargetFramework)'))</_ConventionMapperGeneratedTarget>
+    </PropertyGroup>
+    <ConventionMapperSyncFolder Source="$(_ConventionMapperGeneratedSource)" Destination="$(_ConventionMapperGeneratedTarget)" Check="$(ConventionMapperCheckGeneratedCode)" />
+  </Target>
+
+  <UsingTask TaskName="ConventionMapperSyncFolder" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+      <Check ParameterType="System.Boolean" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        Func<string, string> normalize = text => text.Replace("\r\n", "\n");
+        var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (Directory.Exists(Source))
+            foreach (var file in Directory.GetFiles(Source, "*.cs", SearchOption.AllDirectories))
+                expected[file.Substring(Source.Length).TrimStart('/', '\\')] = File.ReadAllText(file);
+
+        var problems = new List<string>();
+        foreach (var pair in expected)
+        {
+            var target = Path.Combine(Destination, pair.Key);
+            if (File.Exists(target) && normalize(File.ReadAllText(target)) == normalize(pair.Value)) continue;
+            if (Check) { problems.Add((File.Exists(target) ? "changed: " : "missing: ") + pair.Key); continue; }
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            File.WriteAllText(target, pair.Value);
+        }
+        if (Directory.Exists(Destination))
+        {
+            foreach (var file in Directory.GetFiles(Destination, "*.cs", SearchOption.AllDirectories))
+            {
+                var relative = file.Substring(Destination.Length).TrimStart('/', '\\');
+                if (expected.ContainsKey(relative)) continue;
+                // Leave other target frameworks' folders alone in multi-targeted projects.
+                if (relative.IndexOf('/') >= 0 || relative.IndexOf('\\') >= 0) continue;
+                if (Check) problems.Add("stale: " + relative);
+                else File.Delete(file);
+            }
+        }
+        if (problems.Count > 0)
+            Log.LogError(null, "CM0100", null, Destination, 0, 0, 0, 0,
+                "The generated mapping code committed in " + Destination + " is out of date (" + string.Join(", ", problems) +
+                "). Build locally (outside CI) to update it, and commit the result.");
+        return !Log.HasLoggedErrors;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+</Project>
