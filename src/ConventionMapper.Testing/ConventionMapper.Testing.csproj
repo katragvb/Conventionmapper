@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ConventionMapper.Testing</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <!-- Test helpers built on reflection: not meant for trimmed or Native AOT apps. -->
+    <IsTrimmable>false</IsTrimmable>
+
+    <!-- ===== NuGet package ===== -->
+    <PackageId>ConventionMapper.Testing</PackageId>
+    <Version>1.8.0</Version>
+    <Authors>Katragadda</Authors>
+    <Company>Katragadda</Company>
+    <Product>ConventionMapper</Product>
+    <Description>Test helpers for ConventionMapper and ConventionMapper.SourceGenerator mappings: MapperAssert.WritesExactly fills a source object and checks exactly which destination members a map writes (or compares with the generator's WriteSets), and MapperAssert.AllMethodsCovered fails when a mapping method is never called from the tests. Works with any test framework.</Description>
+    <PackageTags>mapper;object-mapper;mapping;testing;unit-testing;source-generator</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/katragvb/Conventionmapper</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/katragvb/Conventionmapper</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

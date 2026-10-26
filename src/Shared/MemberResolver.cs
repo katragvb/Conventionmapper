@@ -135,7 +135,49 @@ namespace ConventionMapper.Roslyn
             return null;
         }
 
-        /// <summary>Resolves an explicit dotted path such as "Customer.Address.City" (case-insensitive segments).</summary>
+        /// <summary>
+        /// Every source member chain that the conventions could bind to a destination name. At each level, direct matches
+        /// (properties, fields and Get-methods with the name) are the candidates; only when there is none, every flattening.
+        /// <see cref="FindPath(ITypeSymbol, string)"/> silently picks one of these; more than one candidate means the binding is a guess.
+        /// </summary>
+        public List<List<ISymbol>> FindCandidatePaths(ITypeSymbol sourceType, string destinationName)
+        {
+            var result = new List<List<ISymbol>>();
+            CollectCandidates(sourceType, destinationName, 0, result);
+            return result;
+        }
+
+        private void CollectCandidates(ITypeSymbol sourceType, string name, int depth, List<List<ISymbol>> result)
+        {
+            if (depth > MaxFlattenDepth || name.Length == 0) return;
+            if (IsNullableValueType(sourceType, out _)) return;
+            if (sourceType.SpecialType != SpecialType.None || sourceType.TypeKind == TypeKind.Enum) return;
+
+            var members = GetReadableMembers(sourceType);
+            var direct = members.Where(m => string.Equals(ConventionName(m), name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (direct.Count > 0)
+            {
+                foreach (var member in direct) result.Add(new List<ISymbol> { member });
+                return;
+            }
+
+            foreach (var member in members)
+            {
+                var prefix = ConventionName(member);
+                if (name.Length <= prefix.Length || !name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                var memberType = TypeOf(member);
+                if (memberType.IsValueType) continue;
+                var nested = new List<List<ISymbol>>();
+                CollectCandidates(memberType, name.Substring(prefix.Length), depth + 1, nested);
+                foreach (var rest in nested)
+                {
+                    rest.Insert(0, member);
+                    result.Add(rest);
+                }
+            }
+        }
+
+        /// <summary>Resolves an explicit dotted path such as "Customer.Address.City" (case-insensitive segments; an exact-case match wins).</summary>
         public List<ISymbol>? FindExplicitPath(ITypeSymbol sourceType, string path)
         {
             var result = new List<ISymbol>();
@@ -145,7 +187,8 @@ namespace ConventionMapper.Roslyn
                 var name = segment.Trim();
                 if (name.EndsWith("()", StringComparison.Ordinal)) name = name.Substring(0, name.Length - 2);
                 var members = GetReadableMembers(current);
-                var match = members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+                var match = members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.Ordinal)) ??
+                            members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (match == null) return null;
                 result.Add(match);
                 current = TypeOf(match);

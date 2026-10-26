@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Imports the SourceGenerator package's build files directly (a project reference does not import package targets). -->
+  <Import Project="..\..\src\ConventionMapper.SourceGenerator\build\ConventionMapper.SourceGenerator.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <ConventionMapperEmitGeneratedCode>Generated</ConventionMapperEmitGeneratedCode>
+    <ConventionMapperGeneratedDocs>true</ConventionMapperGeneratedDocs>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator\ConventionMapper.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Import Project="..\..\src\ConventionMapper.SourceGenerator\build\ConventionMapper.SourceGenerator.targets" />
+</Project>

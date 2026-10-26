@@ -72,6 +72,46 @@ namespace ConventionMapper.SourceGenerator
             "Source path '{0}' for '{1}' matches both the source member '{2}' and the parameter '{3}' (names are case-insensitive). Rename the parameter so the source is unambiguous.",
             Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor AmbiguousSource = new DiagnosticDescriptor(
+            "CM0015", "Ambiguous source for a destination member",
+            "Destination member '{0}' on '{1}' could be mapped from {2}. Choose one with [MapMember(\"...\", \"{0}\")].",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor LossyConversion = new DiagnosticDescriptor(
+            "CM0016", "Conversion can fail or lose data at runtime",
+            "'{0}' is converted to '{1}' with {2}, which can throw or lose data at runtime. If this is intended, allow it with [MapAllowParse(\"{3}\")].",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor UnmarkedConversionMethod = new DiagnosticDescriptor(
+            "CM0017", "Static method used as a conversion",
+            "Static method '{0}' converts {1} and is used as a conversion for {2}. Mark it [MapConversion] if that is intended, or move it out of the mapper class.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor InvalidMapConversion = new DiagnosticDescriptor(
+            "CM0018", "Invalid [MapConversion] method",
+            "[MapConversion] method '{0}' must be a non-generic static method of the mapper class that takes one value and returns another",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor InvalidMapInherit = new DiagnosticDescriptor(
+            "CM0019", "Invalid [MapInherit]",
+            "[MapInherit(\"{0}\")] on '{1}': {2}",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor UseNameof = new DiagnosticDescriptor(
+            "CM0020", "Member name can use nameof",
+            "Use nameof({0}) instead of \"{1}\" so a rename updates the attribute",
+            Category, DiagnosticSeverity.Hidden, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor ProjectionClientEvaluation = new DiagnosticDescriptor(
+            "CM0021", "Projection may not translate to SQL",
+            "In projection '{0}', '{1}' uses {2}, which {3}. Map it after the query, add a computed column, or skip it with [MapIgnore(\"{4}\")].",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor UnknownProvider = new DiagnosticDescriptor(
+            "CM0022", "Unknown projection provider",
+            "Provider '{0}' is not known; use one of {1}. Projections are checked with the default rules.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

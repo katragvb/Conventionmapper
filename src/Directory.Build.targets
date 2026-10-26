@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    Every package carries CHANGELOG.md, and its release notes (shown by NuGet in Visual Studio and on nuget.org) are the
+    CHANGELOG section of the version being packed, so an upgrade shows what changed without leaving the IDE.
+  -->
+  <PropertyGroup>
+    <_ConventionMapperChangelog>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'CHANGELOG.md'))</_ConventionMapperChangelog>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' != 'false' and Exists('$(_ConventionMapperChangelog)')">
+    <None Include="$(_ConventionMapperChangelog)" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="ConventionMapperReleaseNotes" BeforeTargets="GenerateNuspec" Condition="'$(IsPackable)' != 'false' and Exists('$(_ConventionMapperChangelog)')">
+    <PropertyGroup>
+      <!-- 1.8.0-ci.42 uses the 1.8.0 section. -->
+      <_ConventionMapperBaseVersion>$(PackageVersion.Split('-')[0])</_ConventionMapperBaseVersion>
+      <_ConventionMapperChangelogText>$([System.IO.File]::ReadAllText('$(_ConventionMapperChangelog)').Replace('&#13;', ''))</_ConventionMapperChangelogText>
+      <_ConventionMapperSection>$([System.Text.RegularExpressions.Regex]::Match('$(_ConventionMapperChangelogText)', '(?ms)^## $([System.Text.RegularExpressions.Regex]::Escape('$(_ConventionMapperBaseVersion)'))\b.*?(?=^## |\z)').Value.Trim())</_ConventionMapperSection>
+      <PackageReleaseNotes Condition="'$(_ConventionMapperSection)' != ''">$(_ConventionMapperSection)
+
+Full history: CHANGELOG.md in this package, or https://github.com/katragvb/Conventionmapper/blob/main/CHANGELOG.md</PackageReleaseNotes>
+    </PropertyGroup>
+  </Target>
+</Project>

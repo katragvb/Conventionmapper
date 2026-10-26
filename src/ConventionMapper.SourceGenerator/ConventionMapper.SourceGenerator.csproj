@@ -14,7 +14,7 @@
 
     <!-- ===== NuGet package: analyzer-only, no runtime dependency ===== -->
     <PackageId>ConventionMapper.SourceGenerator</PackageId>
-    <Version>1.7.1</Version>
+    <Version>1.8.0</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
@@ -42,10 +42,19 @@
     <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- IDE fixes for the generator's diagnostics (CM0001, CM0020, CM0023), shipped next to the generator. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ConventionMapper.SourceGenerator.CodeFixes\ConventionMapper.SourceGenerator.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\ConventionMapper.SourceGenerator.CodeFixes\bin\$(Configuration)\netstandard2.0\ConventionMapper.SourceGenerator.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
+    <!-- ConventionMapperGeneratedDocs and ConventionMapperEmitGeneratedCode (see docs/source-generator.md). -->
+    <None Include="build\ConventionMapper.SourceGenerator.props" Pack="true" PackagePath="build\" />
+    <None Include="build\ConventionMapper.SourceGenerator.targets" Pack="true" PackagePath="build\" />
   </ItemGroup>
 
   <ItemGroup>
