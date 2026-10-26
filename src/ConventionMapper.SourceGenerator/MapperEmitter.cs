@@ -2824,6 +2824,8 @@ namespace ConventionMapper.SourceGenerator
                 notes.Add("sensitive");
                 SensitiveTargets(member).Add(Short(destination) + "." + memberName);
             }
+            foreach (var member in path) SuggestSensitive(member);
+            SuggestSensitive(destinationSymbol);
             if (!(path[0] is IParameterSymbol))
             {
                 foreach (var member in path) RecordRead(member);
@@ -2884,6 +2886,43 @@ namespace ConventionMapper.SourceGenerator
         }
 
         private readonly List<Edge> _edges = new List<Edge>();
+
+        // ------------------------------------------------------------------ CM0026: members that look like personal data
+
+        private static readonly string[] PersonalNames =
+        {
+            "ssn", "socialsecurity", "taxid", "tin", "nationalid", "dateofbirth", "birthdate", "dob", "email", "phone", "mobile", "fax",
+            "bankaccount", "accountnumber", "routingnumber", "iban", "creditcard", "cardnumber", "cvv", "passport", "driverslicense",
+            "driverlicense", "licensenumber", "password", "passwordhash", "secret", "apikey", "accesstoken", "refreshtoken",
+        };
+
+        // Hungarian-style prefixes common in database-first code (StrEmail, DtDateOfBirth).
+        private static readonly string[] TypePrefixes = { "str", "int", "dec", "dt", "lng", "bit", "sz", "s" };
+
+        private readonly HashSet<ISymbol> _suggestedSensitive = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+        /// <summary>CM0026 (info) on a mapped member, declared in this compilation, whose name looks like personal data.</summary>
+        private void SuggestSensitive(ISymbol member)
+        {
+            if (!(member is IPropertySymbol || member is IFieldSymbol) || MemberResolver.IsSensitive(member)) return;
+            var location = member.Locations.FirstOrDefault();
+            if (location == null || !location.IsInSource || !_suggestedSensitive.Add(member)) return;
+            var type = MemberResolver.TypeOf(member);
+            if (MemberResolver.IsNullableValueType(type, out var underlying)) type = underlying;
+            var name = member.Name.ToLowerInvariant();
+            var isText = type.SpecialType == SpecialType.System_String;
+            var isDate = type.SpecialType == SpecialType.System_DateTime || type.ToDisplayString() == "System.DateOnly";
+            if (!isText && !isDate) return;
+            foreach (var prefix in TypePrefixes)
+                if (name.Length > prefix.Length + 2 && name.StartsWith(prefix, StringComparison.Ordinal) && char.IsUpper(member.Name[prefix.Length]))
+                {
+                    name = name.Substring(prefix.Length);
+                    break;
+                }
+            var matches = PersonalNames.Any(p => name == p || (p.Length > 3 && (name.EndsWith(p, StringComparison.Ordinal) || name.StartsWith(p, StringComparison.Ordinal))));
+            if (!matches || (isDate && !(name.Contains("birth") || name == "dob"))) return;
+            _diagnostics.Add(Diagnostic.Create(Diagnostics.SuggestSensitive, location, (member.ContainingType != null ? Short(member.ContainingType) + "." : string.Empty) + member.Name));
+        }
 
         // ------------------------------------------------------------------ lineage and source reads
 
