@@ -933,6 +933,12 @@ namespace ConventionMapper.SourceGenerator
                 return;
             }
 
+            if (HasAttribute(method, MapperGenerator.MapCombineAttributeName))
+            {
+                EmitCombine(method, w);
+                return;
+            }
+
             var isCreate = method.Parameters.Length >= 1 && !method.ReturnsVoid;
             var isUpdate = method.Parameters.Length >= 2 && method.ReturnsVoid;
             if (method.IsGenericMethod || method.ReturnsByRef || method.ReturnsByRefReadonly ||
@@ -946,6 +952,11 @@ namespace ConventionMapper.SourceGenerator
 
             var config = ReadConfig(method);
             var source = method.Parameters[0];
+            if (HasAttribute(method, MapperGenerator.MapPatchAttributeName))
+            {
+                if (isCreate) Report(Diagnostics.InvalidValueAttribute, "MapPatch", method.Name, method.Name, "a patch updates an existing object: void Patch(TSource source, TTarget target)");
+                else config.Patch = true;
+            }
             if (HasAttribute(method, MapperGenerator.MapRedactAttributeName))
             {
                 if (!isCreate || !SymbolEqualityComparer.Default.Equals(source.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated), method.ReturnType.WithNullableAnnotation(NullableAnnotation.NotAnnotated)))
@@ -1063,6 +1074,12 @@ namespace ConventionMapper.SourceGenerator
                     foreach (var required in StringArguments(attribute)) config.Required.Add(required);
                 else if (name == MapperGenerator.MapTruncateAttributeName && args.Length >= 1 && args[0].Value is string truncated)
                     config.Truncate[truncated] = args.Length > 1 && args[1].Value is int length ? length : 0;
+                else if (name == MapperGenerator.MapWhenAttributeName && args.Length == 2 && args[0].Value is string whenMember && args[1].Value is string predicate)
+                    config.When[whenMember] = predicate;
+                else if (name == MapperGenerator.MapFormatAttributeName && args.Length == 2 && args[0].Value is string formatMember && args[1].Value is string format)
+                    config.Format[formatMember] = format;
+                else if (name == MapperGenerator.MapCheckedAttributeName)
+                    foreach (var checkedMember in StringArguments(attribute)) config.Checked.Add(checkedMember);
                 else
                     ReadExplicit(attribute, config);
             }
@@ -1176,7 +1193,8 @@ namespace ConventionMapper.SourceGenerator
         private void CheckConfigUsage(MemberConfig config, IMethodSymbol method, ITypeSymbol destination)
         {
             if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0 && config.AllowParse.Count == 0 && config.Reviewed.Count == 0 &&
-                config.Constants.Count == 0 && config.Computed.Count == 0 && config.Required.Count == 0 && config.Truncate.Count == 0) return;
+                config.Constants.Count == 0 && config.Computed.Count == 0 && config.Required.Count == 0 && config.Truncate.Count == 0 &&
+                config.When.Count == 0 && config.Format.Count == 0 && config.Checked.Count == 0) return;
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (destination is INamedTypeSymbol named)
             {
@@ -1204,6 +1222,12 @@ namespace ConventionMapper.SourceGenerator
                 if (!known.Contains(required)) Report(Diagnostics.UnknownAttributeMember, required, "MapRequired", method.Name);
             foreach (var pair in config.Truncate)
                 if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapTruncate", method.Name);
+            foreach (var pair in config.When)
+                if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapWhen", method.Name);
+            foreach (var pair in config.Format)
+                if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapFormat", method.Name);
+            foreach (var member in config.Checked)
+                if (!known.Contains(member)) Report(Diagnostics.UnknownAttributeMember, member, "MapChecked", method.Name);
         }
 
         // ================================================================== bodies
@@ -1251,6 +1275,7 @@ namespace ConventionMapper.SourceGenerator
             }
 
             var assignments = new List<string>();
+            var conditional = new List<string>(); // [MapWhen] on settable members: assigned after construction
             foreach (var member in GetWritableMembers(destination, false))
             {
                 if (config.Ignored.Contains(member.Name)) RecordIgnored(source, destination, member);
@@ -1260,11 +1285,194 @@ namespace ConventionMapper.SourceGenerator
                     RecordSkipped(source, destination, member);
                     continue;
                 }
+                var condition = WhenCondition(member.Name, source, src, config, projection: false);
                 var value = MapMember(source, src, member, destination, config);
-                if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
+                _rowNotes = null;
+                if (value == null) continue;
+                if (condition == null) assignments.Add(Escape(member.Name) + " = " + value);
+                else if (member is IPropertySymbol { SetMethod: { IsInitOnly: true } } || destination.IsValueType)
+                    assignments.Add(Escape(member.Name) + " = " + condition + " ? " + value + " : default(" + T(MemberResolver.TypeOf(member)) + ")!");
+                else conditional.Add("if (" + condition + ") __result." + Escape(member.Name) + " = " + value + ";");
             }
 
             var creation = "new " + T(destination) + "(" + string.Join(", ", arguments) + ")";
+            var prefix = conditional.Count == 0 ? "return " : "var __result = ";
+            if (assignments.Count == 0) w.Line(prefix + creation + ";");
+            else
+            {
+                w.Line(prefix + creation);
+                w.Line("{");
+                w.Indent();
+                foreach (var assignment in assignments) w.Line(assignment + ",");
+                w.Outdent();
+                w.Line("};");
+            }
+            if (conditional.Count == 0) return;
+            foreach (var line in conditional) w.Line(line);
+            w.Line("return __result;");
+        }
+
+        /// <summary>Notes added to the report rows recorded while a member with [MapWhen] or [MapPatch] is mapped.</summary>
+        private List<string>? _rowNotes;
+
+        private string? _rowNotesFor;
+
+        /// <summary>[MapPatch]: the condition under which the member just mapped is written (null: always).</summary>
+        private string? _patchGuard;
+
+        /// <summary>
+        /// [MapPatch]: a source that can say "not set" becomes a guard. "source.City is { } v" for nullable values (the value is v),
+        /// "source.City is { HasValue: true } v" for an Optional&lt;T&gt;-shaped wrapper (the value is v.Value).
+        /// Non-nullable value types can't say "not set", so they are always copied.
+        /// </summary>
+        private MemberAccess ApplyPatch(MemberAccess access, string destinationName)
+        {
+            var v = NewVariable();
+            var plain = MemberResolver.IsNullableValueType(access.Type, out var underlying) ? underlying : access.Type;
+            var optionalValue = OptionalValueType(plain);
+            string? guard = null;
+            MemberAccess result = access;
+            if (optionalValue != null)
+            {
+                guard = "(" + access.Expression + ") is { HasValue: true } " + v;
+                result = new MemberAccess(v + ".Value", optionalValue, false);
+            }
+            else if (MemberResolver.IsNullableValueType(access.Type, out _) || access.Type.IsReferenceType)
+            {
+                guard = "(" + access.Expression + ") is { } " + v;
+                result = new MemberAccess(v, access.Type.IsReferenceType ? access.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated) : underlying, false);
+            }
+            if (guard == null) return access;
+            _patchGuard = guard;
+            if (_rowNotes == null || !string.Equals(_rowNotesFor, destinationName, StringComparison.OrdinalIgnoreCase)) _rowNotes = new List<string>();
+            _rowNotes.Add("only when set");
+            _rowNotesFor = destinationName;
+            return result;
+        }
+
+        /// <summary>T for an Optional&lt;T&gt;-shaped type: generic, with a bool HasValue and a T Value property.</summary>
+        private static ITypeSymbol? OptionalValueType(ITypeSymbol type)
+        {
+            if (!(type is INamedTypeSymbol named) || !named.IsGenericType || named.TypeArguments.Length != 1 || named.Name != "Optional") return null;
+            var hasValue = named.GetMembers("HasValue").OfType<IPropertySymbol>().FirstOrDefault();
+            var value = named.GetMembers("Value").OfType<IPropertySymbol>().FirstOrDefault();
+            if (hasValue == null || value == null || hasValue.Type.SpecialType != SpecialType.System_Boolean) return null;
+            return value.Type;
+        }
+
+        // ------------------------------------------------------------------ [MapCombine]
+
+        /// <summary>
+        /// [MapCombine] D Combine(S1 first, S2 second, ...): each member takes the first source (in parameter order, or the
+        /// [MapPrefer] order) that has a value: not null, and for non-nullable value types not the default.
+        /// </summary>
+        private void EmitCombine(IMethodSymbol method, CodeWriter w)
+        {
+            var destination = method.ReturnType as INamedTypeSymbol;
+            if (method.Parameters.Length < 2 || method.ReturnsVoid || destination == null || !IsConstructible(destination) ||
+                method.Parameters.Any(p => p.RefKind != RefKind.None || !IsObjectLike(p.Type, true)) || method.IsGenericMethod)
+            {
+                Report(Diagnostics.InvalidValueAttribute, "MapCombine", method.Name, method.Name,
+                    "a combine method takes two or more source objects and returns the combined object: D Combine(S first, S second)");
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+            var ctor = destination.InstanceConstructors.FirstOrDefault(c => c.Parameters.Length == 0 && IsAccessible(c));
+            if (ctor == null && !destination.IsValueType)
+            {
+                Report(Diagnostics.InvalidValueAttribute, "MapCombine", method.Name, method.Name, Short(destination) + " needs an accessible parameterless constructor");
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+
+            var config = ReadConfig(method);
+            var prefer = new Dictionary<string, IParameterSymbol>(StringComparer.OrdinalIgnoreCase);
+            foreach (var attribute in method.GetAttributes().Where(a => a.AttributeClass?.ToDisplayString() == MapperGenerator.MapPreferAttributeName))
+            {
+                var sourceName = attribute.ConstructorArguments.Length > 0 ? attribute.ConstructorArguments[0].Value as string : null;
+                var parameter = method.Parameters.FirstOrDefault(p => string.Equals(p.Name, sourceName, StringComparison.Ordinal));
+                if (parameter == null)
+                {
+                    ReportAt(Diagnostics.InvalidValueAttribute, AttributeLocation(attribute), "MapPrefer", sourceName ?? string.Empty, method.Name,
+                        "'" + sourceName + "' is not a parameter of " + method.Name);
+                    continue;
+                }
+                foreach (var member in attribute.ConstructorArguments.Skip(1).SelectMany(a => a.Kind == TypedConstantKind.Array ? a.Values : ImmutableArray.Create(a)))
+                    if (member.Value is string name) prefer[name] = parameter;
+            }
+
+            var first = method.Parameters[0];
+            RecordMap(first.Type, destination);
+            var known = new HashSet<string>(GetWritableMembers(destination, false).Select(m => m.Name), StringComparer.OrdinalIgnoreCase);
+            foreach (var name in prefer.Keys.Where(n => !known.Contains(n))) Report(Diagnostics.UnknownAttributeMember, name, "MapPrefer", method.Name);
+
+            var assignments = new List<string>();
+            foreach (var member in GetWritableMembers(destination, false))
+            {
+                var name = member.Name;
+                if (config.Ignored.Contains(name))
+                {
+                    RecordIgnored(first.Type, destination, member);
+                    continue;
+                }
+                if (!config.Includes(name))
+                {
+                    RecordSkipped(first.Type, destination, member);
+                    continue;
+                }
+                var memberType = MemberResolver.TypeOf(member);
+                if (TryAttributeValue(first.Type, Escape(first.Name), name, memberType, member, destination, config, false, out var attributeValue))
+                {
+                    if (attributeValue != null) assignments.Add(Escape(name) + " = " + attributeValue);
+                    continue;
+                }
+
+                var order = method.Parameters.ToList();
+                if (prefer.TryGetValue(name, out var preferred))
+                {
+                    order.Remove(preferred);
+                    order.Insert(0, preferred);
+                }
+                var candidates = new List<(IParameterSymbol Parameter, List<ISymbol> Path, MemberAccess Access, string Value)>();
+                foreach (var parameter in order)
+                {
+                    var path = config.Explicit.TryGetValue(name, out var explicitPath)
+                        ? _resolver.FindExplicitPath(parameter.Type, explicitPath)
+                        : FindConventionPath(parameter.Type, name, destination, out _);
+                    if (path == null) continue;
+                    if (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(member))
+                    {
+                        Report(Diagnostics.SensitiveLeak, parameter.Name + "." + PathText(path), Short(destination) + "." + name, name);
+                        continue;
+                    }
+                    var access = BuildPath(Escape(parameter.Name), parameter.Type, path, rootMayBeNull: true);
+                    var converted = Traced(() => Convert(access.Type, memberType, access.Expression, 0), out var trace);
+                    if (converted == null)
+                    {
+                        Report(Diagnostics.IncompatibleTypes, parameter.Name + "." + PathText(path), Short(access.Type), Short(destination) + "." + name, Short(memberType), name);
+                        continue;
+                    }
+                    CommitTrace(trace, parameter.Name + "." + PathText(path), destination, name, config, projection: false);
+                    foreach (var step in path) RecordRead(step);
+                    candidates.Add((parameter, path, access, converted));
+                }
+                if (candidates.Count == 0)
+                {
+                    ReportUnmapped(name, destination, first.Type, config);
+                    continue;
+                }
+
+                // The last candidate is the fallback; the others are taken when they have a value.
+                var value = candidates[candidates.Count - 1].Value;
+                for (var i = candidates.Count - 2; i >= 0; i--)
+                    value = "(" + HasValueTest(candidates[i].Access, candidates[i].Path) + " ? " + candidates[i].Value + " : " + value + ")";
+                assignments.Add(Escape(name) + " = " + value);
+                var description = string.Join(", then ", candidates.Select(c => "`" + c.Parameter.Name + "." + PathText(c.Path) + "`"));
+                RecordComputed(first.Type, destination, name, member, description, new List<string> { candidates.Count > 1 ? "first with a value" : "combined" });
+            }
+            CheckConfigUsage(config, method, destination);
+
+            var creation = "new " + T(destination) + "()";
             if (assignments.Count == 0)
             {
                 w.Line("return " + creation + ";");
@@ -1276,6 +1484,51 @@ namespace ConventionMapper.SourceGenerator
             foreach (var assignment in assignments) w.Line(assignment + ",");
             w.Outdent();
             w.Line("};");
+        }
+
+        /// <summary>Whether a combine source has a value: not null; for a non-nullable value-type member, also not the default.</summary>
+        private string HasValueTest(MemberAccess access, List<ISymbol> path)
+        {
+            var declared = MemberResolver.TypeOf(path[path.Count - 1]);
+            var declaredIsValue = declared.IsValueType && !MemberResolver.IsNullableValueType(declared, out _);
+            if (MemberResolver.IsNullableValueType(access.Type, out var underlying))
+                return declaredIsValue
+                    ? "!global::System.Collections.Generic.EqualityComparer<" + T(underlying) + ">.Default.Equals((" + access.Expression + ").GetValueOrDefault(), default(" + T(underlying) + "))"
+                    : "(" + access.Expression + ").HasValue";
+            if (access.Type.IsReferenceType) return "(" + access.Expression + ") is not null";
+            return "!global::System.Collections.Generic.EqualityComparer<" + T(access.Type) + ">.Default.Equals(" + access.Expression + ", default(" + T(access.Type) + "))";
+        }
+
+        /// <summary>[MapWhen]: the call deciding whether a member is written, or null when it has none (or after an error).</summary>
+        private string? WhenCondition(string member, ITypeSymbol source, string src, MemberConfig config, bool projection)
+        {
+            _rowNotes = null;
+            if (!config.When.TryGetValue(member, out var methodName)) return null;
+            var method = FindComputeMethod(methodName, source, config);
+            if (method == null || method.ReturnType.SpecialType != SpecialType.System_Boolean)
+            {
+                Report(Diagnostics.InvalidValueAttribute, "MapWhen", member, _current?.Name ?? string.Empty,
+                    "the mapper class needs a static bool method '" + methodName + "' that takes " + Short(source) +
+                    (config.Parameters.Count > 0 ? " (then, optionally, extra parameters of the mapping method by name)" : string.Empty));
+                return null;
+            }
+            var arguments = new List<string> { src };
+            foreach (var p in method.Parameters.Skip(1))
+            {
+                arguments.Add(Escape(config.Parameters[p.Name].Name));
+                config.UsedParameters.Add(config.Parameters[p.Name].Name);
+            }
+            _rowNotes = new List<string> { "when `" + method.Name + "()`" };
+            _rowNotesFor = member;
+            if (projection)
+            {
+                var inlined = InlineExpressionBody(method, arguments);
+                if (inlined != null) return "(" + inlined + ")";
+                if (!ProjectionProvider.RunsInMemory(_provider))
+                    Report(Diagnostics.ProjectionClientEvaluation, _current?.Name ?? string.Empty, Short(source) + "." + member, "the method '" + method.Name + "'",
+                        "is not a single expression, so EF Core runs it in .NET after the query (only allowed in the final Select)", member);
+            }
+            return Escape(method.Name) + "(" + string.Join(", ", arguments) + ")";
         }
 
         /// <summary>Body of "void Update(TSource source, TTarget target)": assigns every settable member of the existing target.</summary>
@@ -1313,8 +1566,18 @@ namespace ConventionMapper.SourceGenerator
                     RecordSkipped(source, named, member);
                     continue;
                 }
+                var condition = WhenCondition(member.Name, source, src, config, projection: false);
+                _patchGuard = null;
                 var value = MapMember(source, src, member, named, config);
-                if (value != null) w.Line(dest + "." + Escape(member.Name) + " = " + value + ";");
+                _rowNotes = null;
+                var guard = _patchGuard;
+                _patchGuard = null;
+                if (value == null) continue;
+                var assignment = dest + "." + Escape(member.Name) + " = " + value + ";";
+                if (guard != null && condition != null) w.Line("if (" + guard + " && " + condition + ") " + assignment);
+                else if (guard != null) w.Line("if (" + guard + ") " + assignment);
+                else if (condition != null) w.Line("if (" + condition + ") " + assignment);
+                else w.Line(assignment);
             }
         }
 
@@ -1485,7 +1748,14 @@ namespace ConventionMapper.SourceGenerator
                 path = FindConventionPath(source, destinationName, owner, out var ambiguous);
                 if (path == null)
                 {
-                    if (!ambiguous) ReportUnmapped(destinationName, owner, source, config);
+                    // A patch DTO carries only the members that can be patched; the others are left alone.
+                    if (config.Patch && !ambiguous)
+                    {
+                        var section = RecordMap(source, owner);
+                        section.Rows[destinationName] = "| " + DestinationCell(destinationName, destinationMember) + " | — | not in the patch |";
+                        section.Cells[destinationName] = new KeyValuePair<string, string>("—", "not in the patch");
+                    }
+                    else if (!ambiguous) ReportUnmapped(destinationName, owner, source, config);
                     return null;
                 }
             }
@@ -1500,6 +1770,7 @@ namespace ConventionMapper.SourceGenerator
             var access = fromParameter == ParameterMatch.Found ? parameterAccess : BuildPath(src, source, path);
             access = ApplyRequired(access, destinationName, owner, sourceName, config, projection: false);
             access = ApplyNullSubstitute(access, destinationName, destinationType, config);
+            if (config.Patch) access = ApplyPatch(access, destinationName);
             var value = Traced(() => Convert(access.Type, destinationType, access.Expression, 0), out var trace);
             if (value == null)
             {
@@ -2490,8 +2761,11 @@ namespace ConventionMapper.SourceGenerator
                     RecordSkipped(source, destination, member);
                     continue;
                 }
+                var condition = WhenCondition(member.Name, source, src, config, projection: true);
                 var value = ProjectionMember(source, src, member, destination, config, depth, stack);
-                if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
+                _rowNotes = null;
+                if (value == null) continue;
+                assignments.Add(Escape(member.Name) + " = " + (condition == null ? value : "(" + condition + " ? " + value + " : default(" + T(MemberResolver.TypeOf(member)) + "))"));
             }
 
             var creation = "new " + T(destination) + "(" + string.Join(", ", arguments) + ")";
@@ -2859,6 +3133,7 @@ namespace ConventionMapper.SourceGenerator
         private void RecordRow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, string description, List<string> notes, string sourcePath)
         {
             var memberName = DestinationMemberName(destination, destinationName);
+            if (_rowNotes != null && string.Equals(destinationName, _rowNotesFor, StringComparison.OrdinalIgnoreCase)) notes.InsertRange(0, _rowNotes);
             var reviewed = _currentReviewed.Contains(memberName) || _classReviewed.Contains(memberName);
             if (IsKey(destination, memberName))
             {
@@ -3395,6 +3670,18 @@ namespace ConventionMapper.SourceGenerator
 
             /// <summary>[MapAllowParse]: destination members allowed to use parsing or narrowing conversions.</summary>
             public HashSet<string> AllowParse { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapPatch]: members are copied only when the caller set them (non-null, or an Optional with a value).</summary>
+            public bool Patch { get; set; }
+
+            /// <summary>[MapWhen]: destination member -> name of the static bool method that decides whether it is written.</summary>
+            public Dictionary<string, string> When { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapFormat]: destination member -> format string (invariant culture).</summary>
+            public Dictionary<string, string> Format { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapChecked]: members whose lossy conversions are range-checked.</summary>
+            public HashSet<string> Checked { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             public bool Includes(string member) =>
                 !ExplicitMode || Listed.Contains(member) || Explicit.ContainsKey(member) || Parameters.ContainsKey(member) ||
