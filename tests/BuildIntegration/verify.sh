@@ -6,6 +6,7 @@ rm -rf Generated bin obj
 fail() { echo "FAIL: $1"; exit 1; }
 
 dotnet build -nologo -v q -p:CI=false > build1.log || { cat build1.log; fail "local build"; }
+if grep -q "warning" build1.log; then cat build1.log; fail "the build targets produce warnings"; fi
 test -f Generated/BuildIntegration.OrderMapper.g.cs || fail "generated file not written"
 test -f Generated/ConventionMapper.DataFlowReport.g.cs || fail "report not written"
 grep -q "Title = order.Name" Generated/BuildIntegration.OrderMapper.g.cs || fail "unexpected generated code"
