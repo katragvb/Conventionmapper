@@ -107,6 +107,30 @@ public class Dst { public int Id { get; set; } public string Name { get; set; } 
             Assert.Contains(errors, m => m.Contains("[MapRequired] for 'Note' on 'Project'") && m.Contains("projection cannot throw"));
         }
 
+        [Fact]
+        public void Merge_methods_are_checked()
+        {
+            var result = Generate(Models + @"
+public class Item { public string Key { get; set; } = """"; public int Count { get; set; } }
+public class Row { public string Key { get; set; } = """"; public int Count { get; set; } }
+public class Other { public int Key { get; set; } }
+[GeneratedMapper] public static partial class M
+{
+    [MapMergeKey(""Key"")] public static partial void Merge(IEnumerable<Item> source, ICollection<Row> target);
+    [MapMergeKey(""Nope"")] public static partial void Unknown(IEnumerable<Item> source, ICollection<Row> target);
+    [MapMergeKey(""Key"")] public static partial void Mismatch(IEnumerable<Item> source, ICollection<Other> target);
+    [MapMergeKey(""Key"")] public static partial void NotCollections(Item source, Row target);
+}");
+
+            Assert.Empty(result.CompileErrors);
+            Assert.Contains("__Update", result.Source); // no Update(Item, Row) declared: a generated helper
+            Assert.Contains("| (merge) | `Key` = `Key` | update matched, add new, remove missing |", result.Report);
+            var errors = result.WithId("CM0025").Select(d => d.GetMessage()).ToList();
+            Assert.Contains(errors, m => m.Contains("no member 'Nope' on Item"));
+            Assert.Contains(errors, m => m.Contains("the keys have different types (string and int)"));
+            Assert.Contains(errors, m => m.Contains("void Merge(IEnumerable<TSource> source, ICollection<TTarget> target)"));
+        }
+
         // ------------------------------------------------------------------ EF model from fluent configuration
 
         private const string EfModels = Usings + @"

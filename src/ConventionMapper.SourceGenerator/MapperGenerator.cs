@@ -28,6 +28,7 @@ namespace ConventionMapper.SourceGenerator
         public const string MapFromAttributeName = "ConventionMapper.MapFromAttribute";
         public const string MapRequiredAttributeName = "ConventionMapper.MapRequiredAttribute";
         public const string MapTruncateAttributeName = "ConventionMapper.MapTruncateAttribute";
+        public const string MapMergeKeyAttributeName = "ConventionMapper.MapMergeKeyAttribute";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
@@ -333,6 +334,27 @@ namespace ConventionMapper
 
         public string Destination { get; }
         public int Length { get; }
+    }
+    /// <summary>
+    /// Makes <c>void Merge(IEnumerable&lt;TSource&gt; source, ICollection&lt;TTarget&gt; target)</c> merge by key: items whose key
+    /// matches are updated in place (with the mapper's Update(TSource, TTarget) method when it has one), new items are
+    /// added, and target items without a match are removed (unless <see cref=""RemoveMissing""/> is false).
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional(""CONVENTIONMAPPER_KEEP_ATTRIBUTES"")]
+    internal sealed class MapMergeKeyAttribute : global::System.Attribute
+    {
+        public MapMergeKeyAttribute(string sourceKey, string? targetKey = null)
+        {
+            SourceKey = sourceKey;
+            TargetKey = targetKey ?? sourceKey;
+        }
+
+        public string SourceKey { get; }
+        public string TargetKey { get; }
+
+        /// <summary>Remove target items that have no source item with their key (default true).</summary>
+        public bool RemoveMissing { get; set; } = true;
     }
 #if !CONVENTIONMAPPER_RUNTIME
     /// <summary>

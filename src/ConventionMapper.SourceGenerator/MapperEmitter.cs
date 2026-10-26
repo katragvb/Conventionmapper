@@ -403,6 +403,125 @@ namespace ConventionMapper.SourceGenerator
             _rootSource = _rootDestination = null;
         }
 
+        // ------------------------------------------------------------------ [MapMergeKey] collection merges
+
+        /// <summary>
+        /// void Merge(IEnumerable&lt;S&gt; source, ICollection&lt;D&gt; target): update matched items, add new ones, remove missing ones.
+        /// </summary>
+        private void EmitMerge(IMethodSymbol method, AttributeData attribute, CodeWriter w)
+        {
+            var location = AttributeLocation(attribute);
+            var sourceElement = method.Parameters.Length == 2 ? ElementTypeOf(method.Parameters[0].Type) : null;
+            var targetType = method.Parameters.Length == 2 ? method.Parameters[1].Type as INamedTypeSymbol : null;
+            var targetCollection = targetType == null ? null :
+                targetType.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_ICollection_T ? targetType :
+                targetType.AllInterfaces.FirstOrDefault(i => i.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_ICollection_T);
+            if (!method.ReturnsVoid || sourceElement == null || targetCollection == null)
+            {
+                ReportAt(Diagnostics.InvalidValueAttribute, location, "MapMergeKey", method.Name, method.Name,
+                    "a merge method must be void Merge(IEnumerable<TSource> source, ICollection<TTarget> target)");
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+            var targetElement = targetCollection.TypeArguments[0];
+            // The element pair is this method's root in the report and the write sets.
+            _rootSource = sourceElement;
+            _rootDestination = targetElement;
+            var sourceKeyName = attribute.ConstructorArguments[0].Value as string ?? string.Empty;
+            var targetKeyName = attribute.ConstructorArguments.Length > 1 && attribute.ConstructorArguments[1].Value is string t ? t : sourceKeyName;
+            var removeMissing = !attribute.NamedArguments.Any(a => a.Key == "RemoveMissing" && a.Value.Value is bool b && !b);
+
+            var sourceKey = _resolver.FindExplicitPath(sourceElement, sourceKeyName);
+            var targetKey = _resolver.FindExplicitPath(targetElement, targetKeyName);
+            if (sourceKey == null || targetKey == null)
+            {
+                ReportAt(Diagnostics.InvalidValueAttribute, location, "MapMergeKey", sourceKey == null ? sourceKeyName : targetKeyName, method.Name,
+                    "no member '" + (sourceKey == null ? sourceKeyName : targetKeyName) + "' on " + Short(sourceKey == null ? sourceElement : targetElement));
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+            var keyType = MemberResolver.TypeOf(targetKey[targetKey.Count - 1]);
+            if (keyType.IsReferenceType) keyType = keyType.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+            var sourceKeyAccess = BuildPath("item", sourceElement, sourceKey);
+            // Keys must be the same type or convert implicitly (no parsing: "1" and 1 are not the same key).
+            var plainSourceKey = MemberResolver.IsNullableValueType(sourceKeyAccess.Type, out var su) ? su : sourceKeyAccess.Type;
+            var plainKey = MemberResolver.IsNullableValueType(keyType, out var ku) ? ku : keyType;
+            if (!SymbolEqualityComparer.Default.Equals(plainSourceKey, plainKey) && !_compilation.ClassifyConversion(plainSourceKey, plainKey).IsImplicit)
+            {
+                ReportAt(Diagnostics.InvalidValueAttribute, location, "MapMergeKey", sourceKeyName, method.Name,
+                    "the keys have different types (" + Short(plainSourceKey) + " and " + Short(plainKey) + ")");
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+            var sourceKeyValue = plainKey.IsValueType ? "(" + T(plainKey) + "?)(" + sourceKeyAccess.Expression + ")" : sourceKeyAccess.Expression;
+
+            // Updates use the mapper's Update(S, D) when it declares one (with its configuration), otherwise a generated helper.
+            var update = _mapper.GetMembers().OfType<IMethodSymbol>().FirstOrDefault(m => m.ReturnsVoid && m.Parameters.Length == 2 && !m.IsGenericMethod &&
+                SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, sourceElement) && SymbolEqualityComparer.Default.Equals(m.Parameters[1].Type, targetElement) &&
+                !m.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == MapperGenerator.MapMergeKeyAttributeName));
+            var updateCall = update != null ? Escape(update.Name) : UpdateHelper(sourceElement, (INamedTypeSymbol)targetElement);
+            var create = Convert(sourceElement, targetElement, "item", 0);
+            if (create == null)
+            {
+                ReportAt(Diagnostics.InvalidValueAttribute, location, "MapMergeKey", method.Name, method.Name,
+                    "cannot create " + Short(targetElement) + " from " + Short(sourceElement));
+                w.Line("throw new global::System.NotSupportedException();");
+                return;
+            }
+
+            var key = T(MemberResolver.IsNullableValueType(keyType, out var underlyingKey) ? underlyingKey : keyType);
+            var src = Escape(method.Parameters[0].Name);
+            var dest = Escape(method.Parameters[1].Name);
+            var targetKeyAccess = BuildPath("existing", targetElement, targetKey);
+            w.Line("if (" + src + " is null) return;");
+            w.Line("if (" + dest + " is null) throw new global::System.ArgumentNullException(nameof(" + dest + "));");
+            w.Line("var byKey = new global::System.Collections.Generic.Dictionary<" + key + ", " + T(targetElement) + ">();");
+            w.Open("foreach (var existing in " + dest + ")");
+            w.Line("if (existing is null) continue;");
+            w.Line("var existingKey = " + targetKeyAccess.Expression + ";");
+            w.Line("if (existingKey is " + key + " k && !byKey.ContainsKey(k)) byKey.Add(k, existing);");
+            w.Close();
+            w.Line("var matched = new global::System.Collections.Generic.HashSet<" + key + ">();");
+            w.Line("var added = new global::System.Collections.Generic.List<" + T(targetElement) + ">();");
+            w.Open("foreach (var item in " + src + ")");
+            w.Line("if (item is null) continue;");
+            w.Line("var sourceKey = " + sourceKeyValue + ";");
+            w.Open("if (sourceKey is " + key + " sk && byKey.TryGetValue(sk, out var match))");
+            w.Line(updateCall + "(item, match);");
+            w.Line("matched.Add(sk);");
+            w.Close();
+            w.Open("else");
+            w.Line("added.Add(" + create + ");");
+            w.Close();
+            w.Close();
+            if (removeMissing)
+            {
+                w.Line("foreach (var pair in byKey)");
+                w.Line("    if (!matched.Contains(pair.Key)) " + dest + ".Remove(pair.Value);");
+            }
+            w.Line("foreach (var item in added) " + dest + ".Add(item);");
+
+            var section = RecordMap(sourceElement, targetElement);
+            section.Rows["(merge)"] = "| (merge) | `" + sourceKeyName + "` = `" + targetKeyName + "` | update matched" +
+                                       (update != null ? " with `" + update.Name + "()`" : string.Empty) + ", add new" + (removeMissing ? ", remove missing" : ", keep missing") + " |";
+        }
+
+        /// <summary>A generated update helper for an element pair that has no declared Update method.</summary>
+        private string UpdateHelper(ITypeSymbol source, INamedTypeSymbol target)
+        {
+            var key = "update:" + PairKey(source, target);
+            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            var name = NewHelperName("Update", source, target);
+            _helperNames[key] = name;
+            var w = new CodeWriter(_memberIndent);
+            w.Line();
+            w.Open("private static void " + name + "(" + T(source) + " source, " + T(target) + " target)");
+            EmitUpdateBody(w, source, target, "source", "target", MemberConfig.Empty, name);
+            w.Close();
+            _helpers.Append(w.ToString());
+            return name;
+        }
+
         // ------------------------------------------------------------------ diagnostics with IDE fixes
 
         private readonly List<KeyValuePair<string, object[]>> _pendingUnmapped = new List<KeyValuePair<string, object[]>>();
@@ -543,6 +662,13 @@ namespace ConventionMapper.SourceGenerator
             if (!method.IsGenericMethod && TryGetProjection(method, out var projectedSource, out var projectedDestination, out var isQueryable))
             {
                 EmitProjection(w, method, projectedSource, projectedDestination, isQueryable);
+                return;
+            }
+
+            var mergeKey = method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == MapperGenerator.MapMergeKeyAttributeName);
+            if (mergeKey != null)
+            {
+                EmitMerge(method, mergeKey, w);
                 return;
             }
 
