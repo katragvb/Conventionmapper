@@ -34,7 +34,7 @@ namespace ConventionMapper.SourceGenerator
 
         public static readonly DiagnosticDescriptor UnsupportedSignature = new DiagnosticDescriptor(
             "CM0006", "Unsupported mapping method",
-            "Mapping method '{0}' must be a non-generic partial method that either takes a source and returns the destination, or takes a source and a target and returns void",
+            "Mapping method '{0}' must be a non-generic partial method that either takes a source (and optional extra values) and returns the destination, or takes a source and a target (and optional extra values) and returns void",
             Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
         public static readonly DiagnosticDescriptor UnmappedEnumValue = new DiagnosticDescriptor(
@@ -51,6 +51,21 @@ namespace ConventionMapper.SourceGenerator
             "CM0010", "Recursive type in a projection",
             "'{0}' refers back to itself; a projection cannot expand it, so the member is left null. Skip it with [MapIgnore] or map it in a separate query.",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor UnusedParameter = new DiagnosticDescriptor(
+            "CM0011", "Mapping method parameter is not used",
+            "Parameter '{0}' of '{1}' does not match any destination member. Rename it to the member it sets, map it with [MapMember(\"{0}\", \"...\")], or remove it.",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor NullSubstituteNeverNull = new DiagnosticDescriptor(
+            "CM0012", "Null substitute has no effect",
+            "The source of '{0}' ({1}) is never null, so [MapNullSubstitute(\"{0}\", ...)] has no effect",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor InvalidNullSubstitute = new DiagnosticDescriptor(
+            "CM0013", "Invalid null substitute",
+            "The null substitute for '{0}' must be a constant of a type that converts implicitly to {1}",
+            Category, DiagnosticSeverity.Error, true, helpLinkUri: HelpLink);
 
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",

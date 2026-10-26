@@ -16,7 +16,7 @@ namespace ConventionMapper.CodeFixes
     /// <summary>
     /// "Generate build-time mapper": on a <c>CreateMap&lt;TSource, TDestination&gt;()</c> call, adds a new file with the
     /// equivalent <c>[GeneratedMapper]</c> class (ConventionMapper.SourceGenerator). Ignore, MapFrom member paths and
-    /// ReverseMap are translated; anything else is listed at the top of the file to be converted by hand.
+    /// NullSubstitute constants and ReverseMap are translated; anything else is listed at the top of the file to be converted by hand.
     /// </summary>
     [ExportCodeRefactoringProvider(LanguageNames.CSharp, Name = nameof(ConvertToGeneratedMapperRefactoring))]
     public sealed class ConvertToGeneratedMapperRefactoring : CodeRefactoringProvider
@@ -127,6 +127,7 @@ namespace ConventionMapper.CodeFixes
             sb.Append(indent).AppendLine("{");
             foreach (var ignored in plan.Ignored) sb.Append(indent).Append("    [MapIgnore(\"").Append(ignored).AppendLine("\")]");
             foreach (var pair in plan.MapFrom) sb.Append(indent).Append("    [MapMember(\"").Append(pair.Value).Append("\", \"").Append(pair.Key).AppendLine("\")]");
+            foreach (var pair in plan.NullSubstitutes) sb.Append(indent).Append("    [MapNullSubstitute(\"").Append(pair.Key).Append("\", ").Append(pair.Value).AppendLine(")]");
             var sourceType = source.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             var destinationType = destination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             sb.Append(indent).Append("    public static partial ").Append(destinationType).Append(" To").Append(destination.Name)
@@ -149,6 +150,7 @@ namespace ConventionMapper.CodeFixes
         public List<string> Ignored { get; } = new List<string>();
         public List<KeyValuePair<string, string>> MapFrom { get; } = new List<KeyValuePair<string, string>>();
         public List<string> Unconverted { get; } = new List<string>();
+        public List<KeyValuePair<string, string>> NullSubstitutes { get; } = new List<KeyValuePair<string, string>>();
         public bool Reverse { get; private set; }
 
         public static MapPlan Read(InvocationExpressionSyntax createMap)
@@ -194,6 +196,11 @@ namespace ConventionMapper.CodeFixes
                         : MemberPath(argument);
                     if (path == null) return false;
                     MapFrom.Add(new KeyValuePair<string, string>(destination, path));
+                    return true;
+                case "NullSubstitute" when option.ArgumentList.Arguments.Count == 1 &&
+                                           option.ArgumentList.Arguments[0].Expression is LiteralExpressionSyntax constant &&
+                                           !constant.IsKind(SyntaxKind.NullLiteralExpression):
+                    NullSubstitutes.Add(new KeyValuePair<string, string>(destination, constant.ToString()));
                     return true;
                 default:
                     return false;

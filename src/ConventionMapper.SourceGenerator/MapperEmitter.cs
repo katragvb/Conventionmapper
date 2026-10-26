@@ -200,8 +200,8 @@ namespace ConventionMapper.SourceGenerator
                 return;
             }
 
-            var isCreate = method.Parameters.Length == 1 && !method.ReturnsVoid;
-            var isUpdate = method.Parameters.Length == 2 && method.ReturnsVoid;
+            var isCreate = method.Parameters.Length >= 1 && !method.ReturnsVoid;
+            var isUpdate = method.Parameters.Length >= 2 && method.ReturnsVoid;
             if (method.IsGenericMethod || method.ReturnsByRef || method.ReturnsByRefReadonly ||
                 method.Parameters.Any(p => p.RefKind != RefKind.None) || !(isCreate || isUpdate) ||
                 (isUpdate && method.Parameters[1].Type.IsValueType))
@@ -214,6 +214,8 @@ namespace ConventionMapper.SourceGenerator
 
             var config = ReadConfig(method);
             var source = method.Parameters[0];
+            // Extra parameters supply values for the destination members with the same name (or as [MapMember] sources).
+            foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2)) config.Parameters[extra.Name] = extra;
             if (isCreate)
             {
                 EmitCreateBody(w, source.Type, method.ReturnType, Escape(source.Name), config, isRoot: true);
@@ -225,6 +227,8 @@ namespace ConventionMapper.SourceGenerator
                 EmitUpdateBody(w, source.Type, target.Type, Escape(source.Name), Escape(target.Name), config, method.Name);
                 CheckConfigUsage(config, method, target.Type);
             }
+            foreach (var extra in config.Parameters.Values)
+                if (!config.UsedParameters.Contains(extra.Name)) Report(Diagnostics.UnusedParameter, extra.Name, method.Name);
             w.Close();
         }
 
@@ -244,9 +248,10 @@ namespace ConventionMapper.SourceGenerator
             return sb.Append(')').ToString();
         }
 
-        private static MemberConfig ReadConfig(IMethodSymbol method)
+        private MemberConfig ReadConfig(IMethodSymbol method)
         {
             var config = new MemberConfig();
+            foreach (var attribute in _mapper.GetAttributes()) ReadExplicit(attribute, config);
             foreach (var attribute in method.GetAttributes())
             {
                 var name = attribute.AttributeClass?.ToDisplayString();
@@ -255,13 +260,30 @@ namespace ConventionMapper.SourceGenerator
                     config.Ignored.Add(ignored);
                 else if (name == MapperGenerator.MapMemberAttributeName && args.Length == 2 && args[0].Value is string from && args[1].Value is string to)
                     config.Explicit[to] = from;
+                else if (name == MapperGenerator.MapNullSubstituteAttributeName && args.Length == 2 && args[0].Value is string target)
+                    config.NullSubstitutes[target] = args[1];
+                else
+                    ReadExplicit(attribute, config);
             }
             return config;
         }
 
+        private static void ReadExplicit(AttributeData attribute, MemberConfig config)
+        {
+            if (attribute.AttributeClass?.ToDisplayString() != MapperGenerator.MapExplicitAttributeName) return;
+            config.ExplicitMode = true;
+            foreach (var argument in attribute.ConstructorArguments)
+            {
+                if (argument.Kind == TypedConstantKind.Array)
+                    foreach (var value in argument.Values) { if (value.Value is string listed) config.Listed.Add(listed); }
+                else if (argument.Value is string single)
+                    config.Listed.Add(single);
+            }
+        }
+
         private void CheckConfigUsage(MemberConfig config, IMethodSymbol method, ITypeSymbol destination)
         {
-            if (config.Ignored.Count == 0 && config.Explicit.Count == 0) return;
+            if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0) return;
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (destination is INamedTypeSymbol named)
             {
@@ -273,6 +295,10 @@ namespace ConventionMapper.SourceGenerator
                 if (!known.Contains(ignored)) Report(Diagnostics.UnknownAttributeMember, ignored, "MapIgnore", method.Name);
             foreach (var pair in config.Explicit)
                 if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapMember", method.Name);
+            foreach (var listed in config.Listed)
+                if (!known.Contains(listed)) Report(Diagnostics.UnknownAttributeMember, listed, "MapExplicit", method.Name);
+            foreach (var pair in config.NullSubstitutes)
+                if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapNullSubstitute", method.Name);
         }
 
         // ================================================================== bodies
@@ -324,6 +350,11 @@ namespace ConventionMapper.SourceGenerator
             {
                 if (config.Ignored.Contains(member.Name)) RecordIgnored(source, destination, member);
                 if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
+                if (!config.Includes(member.Name))
+                {
+                    RecordSkipped(source, destination, member);
+                    continue;
+                }
                 var value = MapMember(source, src, member, destination, config);
                 if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
             }
@@ -372,6 +403,11 @@ namespace ConventionMapper.SourceGenerator
                     RecordIgnored(source, named, member);
                     continue;
                 }
+                if (!config.Includes(member.Name))
+                {
+                    RecordSkipped(source, named, member);
+                    continue;
+                }
                 var value = MapMember(source, src, member, named, config);
                 if (value != null) w.Line(dest + "." + Escape(member.Name) + " = " + value + ";");
             }
@@ -391,10 +427,11 @@ namespace ConventionMapper.SourceGenerator
                 var args = new List<string>();
                 var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var chosenPaths = new List<KeyValuePair<IParameterSymbol, List<ISymbol>>>();
+                var chosenParameters = new List<string>();
                 var ok = true;
                 foreach (var p in ctor.Parameters)
                 {
-                    if (config.Ignored.Contains(p.Name))
+                    if (config.Ignored.Contains(p.Name) || !config.Includes(p.Name))
                     {
                         if (p.HasExplicitDefaultValue || p.IsParams) continue;
                         ok = false;
@@ -402,18 +439,35 @@ namespace ConventionMapper.SourceGenerator
                     }
 
                     string? value = null;
-                    var path = config.Explicit.TryGetValue(p.Name, out var explicitPath)
-                        ? _resolver.FindExplicitPath(source, explicitPath)
-                        : _resolver.FindPath(source, p.Name);
+                    List<ISymbol>? path;
+                    MemberAccess access = default;
+                    var fromParameter = ResolveParameter(p.Name, config, false, out var parameterPath, out var parameterAccess);
+                    if (fromParameter == ParameterMatch.Invalid)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    if (fromParameter == ParameterMatch.Found)
+                    {
+                        path = parameterPath;
+                        access = parameterAccess;
+                    }
+                    else
+                    {
+                        path = config.Explicit.TryGetValue(p.Name, out var explicitPath)
+                            ? _resolver.FindExplicitPath(source, explicitPath)
+                            : _resolver.FindPath(source, p.Name);
+                        if (path != null) access = BuildPath(src, source, path);
+                    }
                     if (path != null && path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
                         !destination.GetMembers().Any(m => string.Equals(m.Name, p.Name, StringComparison.OrdinalIgnoreCase) && MemberResolver.IsSensitive(m)))
                     {
-                        Report(Diagnostics.SensitiveLeak, Short(source) + "." + string.Join(".", path.Select(m => m.Name)), Short(destination) + "(" + p.Name + ")", p.Name);
+                        Report(Diagnostics.SensitiveLeak, Describe(source, path, fromParameter), Short(destination) + "(" + p.Name + ")", p.Name);
                         path = null;
                     }
                     if (path != null)
                     {
-                        var access = BuildPath(src, source, path);
+                        access = ApplyNullSubstitute(access, p.Name, p.Type, config);
                         value = Convert(access.Type, p.Type, access.Expression, 0);
                     }
                     if (value == null)
@@ -425,9 +479,13 @@ namespace ConventionMapper.SourceGenerator
                     args.Add(Escape(p.Name) + ": " + value);
                     used.Add(p.Name);
                     chosenPaths.Add(new KeyValuePair<IParameterSymbol, List<ISymbol>>(p, path!));
+                    if (fromParameter == ParameterMatch.Found) chosenParameters.Add(path![0].Name);
                 }
                 if (!ok) continue;
-                foreach (var pair in chosenPaths) RecordFlow(source, destination, pair.Key.Name + " (constructor)", pair.Key, pair.Value, "constructor parameter");
+                foreach (var name in chosenParameters) config.UsedParameters.Add(name);
+                foreach (var pair in chosenPaths)
+                    RecordFlow(source, destination, pair.Key.Name + " (constructor)", pair.Key, pair.Value,
+                        pair.Value[0] is IParameterSymbol ? "constructor parameter, method parameter" : "constructor parameter");
                 arguments = args;
                 consumed = used;
                 return ctor;
@@ -476,7 +534,13 @@ namespace ConventionMapper.SourceGenerator
             var destinationName = destinationMember.Name;
             var destinationType = MemberResolver.TypeOf(destinationMember);
             List<ISymbol>? path;
-            if (config.Explicit.TryGetValue(destinationName, out var explicitPath))
+            var fromParameter = ResolveParameter(destinationName, config, true, out var parameterPath, out var parameterAccess);
+            if (fromParameter == ParameterMatch.Invalid) return null;
+            if (fromParameter == ParameterMatch.Found)
+            {
+                path = parameterPath;
+            }
+            else if (config.Explicit.TryGetValue(destinationName, out var explicitPath))
             {
                 path = _resolver.FindExplicitPath(source, explicitPath);
                 if (path == null)
@@ -495,14 +559,15 @@ namespace ConventionMapper.SourceGenerator
                 }
             }
 
-            var sourceName = Short(source) + "." + string.Join(".", path.Select(m => m.Name));
+            var sourceName = Describe(source, path, fromParameter);
             if (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(destinationMember))
             {
                 Report(Diagnostics.SensitiveLeak, sourceName, Short(owner) + "." + destinationName, destinationName);
                 return null;
             }
 
-            var access = BuildPath(src, source, path);
+            var access = fromParameter == ParameterMatch.Found ? parameterAccess : BuildPath(src, source, path);
+            access = ApplyNullSubstitute(access, destinationName, destinationType, config);
             var value = Convert(access.Type, destinationType, access.Expression, 0);
             if (value == null)
             {
@@ -511,8 +576,98 @@ namespace ConventionMapper.SourceGenerator
             }
             if (access.MayBeNull && !AcceptsNull(destinationType))
                 Report(Diagnostics.NullableToNonNullable, sourceName, Short(owner) + "." + destinationName);
-            RecordFlow(source, owner, destinationName, destinationMember, path, null);
+            if (fromParameter == ParameterMatch.Found) config.UsedParameters.Add(path[0].Name);
+            RecordFlow(source, owner, destinationName, destinationMember, path, fromParameter == ParameterMatch.Found ? "method parameter" : null);
             return value;
+        }
+
+        private enum ParameterMatch { None, Found, Invalid }
+
+        /// <summary>
+        /// An extra method parameter as the source of a destination member: a parameter with the member's name, or a
+        /// [MapMember] path that starts with a parameter name ("policy" or "policy.Number").
+        /// </summary>
+        private ParameterMatch ResolveParameter(string destinationName, MemberConfig config, bool report, out List<ISymbol> path, out MemberAccess access)
+        {
+            path = null!;
+            access = default;
+            if (config.Parameters.Count == 0) return ParameterMatch.None;
+
+            IParameterSymbol? parameter;
+            var rest = string.Empty;
+            if (config.Explicit.TryGetValue(destinationName, out var explicitPath))
+            {
+                var dot = explicitPath.IndexOf('.');
+                var head = dot < 0 ? explicitPath : explicitPath.Substring(0, dot);
+                if (!config.Parameters.TryGetValue(head, out parameter)) return ParameterMatch.None;
+                rest = dot < 0 ? string.Empty : explicitPath.Substring(dot + 1);
+            }
+            else if (!config.Parameters.TryGetValue(destinationName, out parameter))
+            {
+                return ParameterMatch.None;
+            }
+
+            var members = new List<ISymbol>();
+            if (rest.Length > 0)
+            {
+                var found = _resolver.FindExplicitPath(parameter.Type, rest);
+                if (found == null)
+                {
+                    if (report) Report(Diagnostics.UnknownAttributeMember, explicitPath!, "MapMember", parameter.Name);
+                    return ParameterMatch.Invalid;
+                }
+                members = found;
+            }
+            access = BuildPath(Escape(parameter.Name), parameter.Type, members, rootMayBeNull: true);
+            path = new List<ISymbol> { parameter };
+            path.AddRange(members);
+            return ParameterMatch.Found;
+        }
+
+        private static string Describe(ITypeSymbol source, List<ISymbol> path, ParameterMatch fromParameter) =>
+            fromParameter == ParameterMatch.Found
+                ? "parameter " + string.Join(".", path.Select(m => m.Name))
+                : Short(source) + "." + string.Join(".", path.Select(m => m.Name));
+
+        /// <summary>[MapNullSubstitute]: "(value ?? constant)", typed as the non-nullable value.</summary>
+        private MemberAccess ApplyNullSubstitute(MemberAccess access, string destinationName, ITypeSymbol destinationType, MemberConfig config)
+        {
+            if (!config.NullSubstitutes.TryGetValue(destinationName, out var constant)) return access;
+
+            ITypeSymbol valueType;
+            if (MemberResolver.IsNullableValueType(access.Type, out var underlying)) valueType = underlying;
+            else if (access.Type.IsReferenceType) valueType = access.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+            else
+            {
+                Report(Diagnostics.NullSubstituteNeverNull, destinationName, Short(access.Type));
+                return access;
+            }
+
+            var literal = Literal(constant);
+            if (literal == null || constant.Type == null || !_compilation.ClassifyConversion(constant.Type, valueType).IsImplicit)
+            {
+                Report(Diagnostics.InvalidNullSubstitute, destinationName, Short(valueType));
+                return access;
+            }
+            return new MemberAccess("(" + access.Expression + " ?? " + literal + ")", valueType, false);
+        }
+
+        /// <summary>C# source for an attribute constant, or null for arrays, types and null.</summary>
+        private static string? Literal(TypedConstant constant)
+        {
+            if (constant.IsNull || constant.Type == null) return null;
+            if (constant.Kind == TypedConstantKind.Enum)
+                return "((" + T(constant.Type) + ")(" + SymbolDisplay.FormatPrimitive(constant.Value!, false, false) + "))";
+            if (constant.Kind != TypedConstantKind.Primitive) return null;
+            switch (constant.Value)
+            {
+                case string s: return SymbolDisplay.FormatLiteral(s, true);
+                case char c: return SymbolDisplay.FormatLiteral(c, true);
+                case bool b: return b ? "true" : "false";
+                case double d when double.IsNaN(d) || double.IsInfinity(d): return null;
+                case float f when float.IsNaN(f) || float.IsInfinity(f): return null;
+                default: return "((" + T(constant.Type) + ")(" + SymbolDisplay.FormatPrimitive(constant.Value!, false, false) + "))";
+            }
         }
 
         private static bool AcceptsNull(ITypeSymbol type) =>
@@ -533,7 +688,7 @@ namespace ConventionMapper.SourceGenerator
         }
 
         /// <summary>source.Customer?.Address?.City: null-safe after every reference-type step; value results are lifted to Nullable.</summary>
-        private MemberAccess BuildPath(string src, ITypeSymbol sourceType, List<ISymbol> path)
+        private MemberAccess BuildPath(string src, ITypeSymbol sourceType, List<ISymbol> path, bool rootMayBeNull = false)
         {
             var sb = new StringBuilder(src);
             var current = sourceType;
@@ -542,7 +697,7 @@ namespace ConventionMapper.SourceGenerator
             for (var i = 0; i < path.Count; i++)
             {
                 var member = path[i];
-                if (i > 0 && current.IsReferenceType)
+                if ((i > 0 || rootMayBeNull) && current.IsReferenceType)
                 {
                     sb.Append("?.");
                     lifted = true;
@@ -889,7 +1044,7 @@ namespace ConventionMapper.SourceGenerator
                 var ok = true;
                 foreach (var p in ctor.Parameters)
                 {
-                    var path = config.Ignored.Contains(p.Name) ? null
+                    var path = config.Ignored.Contains(p.Name) || !config.Includes(p.Name) ? null
                         : config.Explicit.TryGetValue(p.Name, out var explicitPath) ? _resolver.FindExplicitPath(source, explicitPath)
                         : _resolver.FindPath(source, p.Name);
                     if (path == null || (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
@@ -898,7 +1053,8 @@ namespace ConventionMapper.SourceGenerator
                         ok = false;
                         break;
                     }
-                    var value = ProjectionValue(MemberResolver.TypeOf(path[path.Count - 1]), p.Type, ProjectionPath(src, path), depth, stack);
+                    var projected = ProjectionSubstitute(ProjectionPath(src, path), MemberResolver.TypeOf(path[path.Count - 1]), p.Name, config, out var projectedType);
+                    var value = ProjectionValue(projectedType, p.Type, projected, depth, stack);
                     if (value == null)
                     {
                         ok = false;
@@ -929,6 +1085,11 @@ namespace ConventionMapper.SourceGenerator
             {
                 if (config.Ignored.Contains(member.Name)) RecordIgnored(source, destination, member);
                 if (consumed.Contains(member.Name) || config.Ignored.Contains(member.Name)) continue;
+                if (!config.Includes(member.Name))
+                {
+                    RecordSkipped(source, destination, member);
+                    continue;
+                }
                 var value = ProjectionMember(source, src, member, destination, config, depth, stack);
                 if (value != null) assignments.Add(Escape(member.Name) + " = " + value);
             }
@@ -967,12 +1128,20 @@ namespace ConventionMapper.SourceGenerator
                 return null;
             }
 
-            var valueType = MemberResolver.TypeOf(path[path.Count - 1]);
             var destinationType = MemberResolver.TypeOf(destinationMember);
-            var value = ProjectionValue(valueType, destinationType, ProjectionPath(src, path), depth, stack);
+            var expression = ProjectionSubstitute(ProjectionPath(src, path), MemberResolver.TypeOf(path[path.Count - 1]), name, config, out var valueType);
+            var value = ProjectionValue(valueType, destinationType, expression, depth, stack);
             if (value == null) Report(Diagnostics.IncompatibleTypes, sourceName, Short(valueType), Short(owner) + "." + name, Short(destinationType), name);
             else RecordFlow(source, owner, name, destinationMember, path, "projection");
             return value;
+        }
+
+        /// <summary>[MapNullSubstitute] in a projection: "x.Status ?? \"\"" (COALESCE in SQL).</summary>
+        private string ProjectionSubstitute(string expression, ITypeSymbol type, string destinationName, MemberConfig config, out ITypeSymbol valueType)
+        {
+            var access = ApplyNullSubstitute(new MemberAccess(expression, type, true), destinationName, type, config);
+            valueType = access.Type;
+            return access.Expression;
         }
 
         /// <summary>x.Customer.Address.City: plain navigation; the LINQ provider handles nulls in SQL.</summary>
@@ -1179,6 +1348,10 @@ namespace ConventionMapper.SourceGenerator
             RecordMap(source, destination)[member.Name] =
                 "| " + DestinationCell(member.Name, member) + " | — | ignored |";
 
+        private void RecordSkipped(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
+            RecordMap(source, destination)[member.Name] =
+                "| " + DestinationCell(member.Name, member) + " | — | not listed ([MapExplicit]) |";
+
         private void RecordFlow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, List<ISymbol> path, string? note)
         {
             var notes = new List<string>();
@@ -1274,6 +1447,18 @@ namespace ConventionMapper.SourceGenerator
 
             public HashSet<string> Ignored { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, string> Explicit { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapExplicit]: only listed, [MapMember] and parameter-supplied members are set.</summary>
+            public bool ExplicitMode { get; set; }
+            public HashSet<string> Listed { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public Dictionary<string, TypedConstant> NullSubstitutes { get; } = new Dictionary<string, TypedConstant>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>Extra parameters of the mapping method, by name.</summary>
+            public Dictionary<string, IParameterSymbol> Parameters { get; } = new Dictionary<string, IParameterSymbol>(StringComparer.OrdinalIgnoreCase);
+            public HashSet<string> UsedParameters { get; } = new HashSet<string>(StringComparer.Ordinal);
+
+            public bool Includes(string member) =>
+                !ExplicitMode || Listed.Contains(member) || Explicit.ContainsKey(member) || Parameters.ContainsKey(member);
         }
     }
 
