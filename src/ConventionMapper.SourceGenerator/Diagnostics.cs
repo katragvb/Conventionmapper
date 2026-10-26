@@ -142,6 +142,16 @@ namespace ConventionMapper.SourceGenerator
             "'{0}' writes {1} '{2}' of the entity '{3}'. Copying it between rows is a common source of duplicate keys and accidental graph changes: leave it out with [MapIgnore(\"{2}\")], or acknowledge it with [MapReviewed(\"{2}\")].",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor CultureSensitive = new DiagnosticDescriptor(
+            "CM0030", "Conversion depends on the server's regional settings",
+            "'{0}' uses {1}, which reads or writes text in the current culture, so the result changes with the server's regional settings. Pass CultureInfo.InvariantCulture, or use [MapFormat] on the member.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
+        public static readonly DiagnosticDescriptor ObsoleteMember = new DiagnosticDescriptor(
+            "CM0031", "Mapping uses an obsolete member",
+            "'{0}' {1} '{2}', which is [Obsolete]{3}",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

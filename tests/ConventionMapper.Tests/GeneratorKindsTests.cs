@@ -72,6 +72,48 @@ namespace K
         }
 
         [Fact]
+        public void Culture_sensitive_helpers_are_reported()
+        {
+            var result = GeneratorHarness.Generate(@"using ConventionMapper; using System; using System.Globalization;
+namespace K
+{
+    public class Money { public decimal Amount { get; set; } public DateTime When { get; set; } }
+    public class Row { public string Amount { get; set; } = """"; public decimal Price { get; set; } public string When { get; set; } = """"; }
+    public class Text { public string Price { get; set; } = """"; }
+    [GeneratedMapper] public static partial class M
+    {
+        public static partial Row ToRow(Money m);
+        public static partial Row FromText(Text t);
+        [MapConversion] private static string Format(decimal d) => d.ToString();
+        [MapConversion] private static decimal Parse(string s) => decimal.Parse(s);
+        [MapConversion] private static string Day(DateTime d) => $""{d:yyyy-MM-dd}"";
+        private static string Fine(decimal d) => d.ToString(CultureInfo.InvariantCulture) + FormattableString.Invariant($""{d}"") + 1.ToString();
+    }
+}");
+            var messages = result.WithId("CM0030").Select(d => d.GetMessage()).ToList();
+            Assert.Equal(3, messages.Count);
+            Assert.Contains(messages, m => m.StartsWith("'Format' uses decimal.ToString() without a format provider"));
+            Assert.Contains(messages, m => m.StartsWith("'Parse' uses decimal.Parse without a format provider"));
+            Assert.Contains(messages, m => m.StartsWith("'Day' uses an interpolated DateTime"));
+        }
+
+        [Fact]
+        public void Obsolete_members_and_dropped_time_parts_are_reported()
+        {
+            var result = GeneratorHarness.Generate(@"using ConventionMapper; using System;
+namespace K
+{
+    public class S { [Obsolete(""Use Code."")] public string Legacy { get; set; } = """"; public DateTime Day { get; set; } }
+    public class D { public string Legacy { get; set; } = """"; [Obsolete] public string Other { get; set; } = """"; public DateOnly Day { get; set; } }
+    [GeneratedMapper] public static partial class M { [MapMember(nameof(S.Legacy), nameof(D.Other))] public static partial D Map(S s); }
+}");
+            var obsolete = result.WithId("CM0031").Select(d => d.GetMessage()).ToList();
+            Assert.Contains("'Map' reads 'S.Legacy', which is [Obsolete]: Use Code.", obsolete);
+            Assert.Contains("'Map' writes 'D.Other', which is [Obsolete]", obsolete);
+            Assert.Contains(result.WithId("CM0016"), d => d.GetMessage().Contains("dropping the time part (DateTime to DateOnly)"));
+        }
+
+        [Fact]
         public void When_needs_a_static_bool_method()
         {
             var result = GeneratorHarness.Generate(Models + @"

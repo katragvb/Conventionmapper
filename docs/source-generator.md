@@ -180,7 +180,7 @@ public static partial class OrderMapper
 
     // Used for every Money -> string member, in every method of this mapper.
     [MapConversion]
-    private static string Format(Money money) => money.Amount.ToString("0.00") + " " + money.Currency;
+    private static string Format(Money money) => money.Amount.ToString("0.00", CultureInfo.InvariantCulture) + " " + money.Currency;
 }
 ```
 

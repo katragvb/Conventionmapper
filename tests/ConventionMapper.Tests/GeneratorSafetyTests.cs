@@ -212,7 +212,7 @@ public class ProductDto { public string Price { get; set; } = """"; public strin
 [GeneratedMapper] public static partial class M
 {
     public static partial ProductDto Map(Product p);
-    [MapConversion] private static string Format(Money m) => m.Amount.ToString();
+    [MapConversion] private static string Format(Money m) => m.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }");
 
             AssertClean(result);
