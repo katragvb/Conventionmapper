@@ -1,0 +1,4 @@
+# LF everywhere, on every OS: tests compare generated text and edit test sources with "\n".
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
