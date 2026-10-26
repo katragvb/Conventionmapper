@@ -39,8 +39,31 @@ namespace ConventionMapper.SourceGenerator
         private readonly HashSet<string> _reportedEnumPairs = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> _reportedAmbiguities = new HashSet<string>(StringComparer.Ordinal);
 
-        // Data-flow report: "`S` → `D`" -> destination member -> table row; sensitive member -> destinations.
-        private readonly SortedDictionary<string, SortedDictionary<string, string>> _flows = new SortedDictionary<string, SortedDictionary<string, string>>(StringComparer.Ordinal);
+        // Class-level settings from [GeneratedMapper] and [MapAllowParse] on the class.
+        private bool _requireMapConversion;
+        private string _provider = ProjectionProvider.Default;
+        private readonly HashSet<string> _classAllowParse = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Ordinary static methods marked [MapConversion] (no CM0017 for these).</summary>
+        private readonly HashSet<IMethodSymbol> _markedConversions = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+        /// <summary>Conversion method -> "Owner.Member" it was applied to (report column and CM0017).</summary>
+        private readonly Dictionary<IMethodSymbol, SortedSet<string>> _conversionUses = new Dictionary<IMethodSymbol, SortedSet<string>>(SymbolEqualityComparer.Default);
+
+        /// <summary>What the value conversion of the member being mapped did: risky conversions and user methods it called.</summary>
+        private Trace? _trace;
+        private readonly Dictionary<string, Trace> _helperTraces = new Dictionary<string, Trace>(StringComparer.Ordinal);
+
+        // Data-flow report: section key -> section (method sections first, by name then declaration order; nested maps after);
+        // sensitive member -> destinations; flows a reviewer should look at first.
+        private readonly SortedDictionary<string, FlowSection> _flows = new SortedDictionary<string, FlowSection>(StringComparer.Ordinal);
+        private readonly SortedSet<string> _riskyFlows = new SortedSet<string>(StringComparer.Ordinal);
+
+        /// <summary>Destination members each mapping method writes (top level), for the generated WriteSets and the method docs.</summary>
+        private readonly Dictionary<IMethodSymbol, SortedSet<string>> _writeSets = new Dictionary<IMethodSymbol, SortedSet<string>>(SymbolEqualityComparer.Default);
+        private readonly Dictionary<IMethodSymbol, int> _methodOrder = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
+        private ITypeSymbol? _rootSource;
+        private ITypeSymbol? _rootDestination;
         private readonly SortedDictionary<string, SortedSet<string>> _sensitive = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         private int _counter;
         private int _memberIndent;
@@ -103,16 +126,29 @@ namespace ConventionMapper.SourceGenerator
             // Static methods of the mapper that convert one type to another are reused wherever that pair occurs:
             // the partial mapping methods themselves, and ordinary helpers such as "static string Format(Money m)".
             // Ordinary methods win over partial ones for the same pair, because they express a deliberate choice.
+            ReadClassSettings();
             foreach (var pair in methods) RegisterUserMap(pair.Key);
             foreach (var member in _mapper.GetMembers())
             {
-                if (member is IMethodSymbol method && method.MethodKind == MethodKind.Ordinary && !IsPartialDefinition(method))
-                    RegisterUserMap(method, overwrite: true);
+                if (!(member is IMethodSymbol method) || method.MethodKind != MethodKind.Ordinary || IsPartialDefinition(method)) continue;
+                var marked = HasAttribute(method, MapperGenerator.MapConversionAttributeName);
+                if (marked)
+                {
+                    if (!IsConversionShape(method))
+                    {
+                        _diagnostics.Add(Diagnostic.Create(Diagnostics.InvalidMapConversion, method.Locations.FirstOrDefault() ?? node.Identifier.GetLocation(), method.Name));
+                        continue;
+                    }
+                    _markedConversions.Add(method);
+                }
+                else if (_requireMapConversion) continue;
+                RegisterUserMap(method, overwrite: true);
             }
 
             var hasNamespace = !_mapper.ContainingNamespace.IsGlobalNamespace;
             _memberIndent = (hasNamespace ? 1 : 0) + chain.Count;
 
+            for (var i = 0; i < methods.Count; i++) _methodOrder[methods[i].Key] = i;
             var body = new CodeWriter(_memberIndent);
             var first = true;
             foreach (var pair in methods)
@@ -122,6 +158,7 @@ namespace ConventionMapper.SourceGenerator
                 first = false;
                 EmitMethod(pair.Key, pair.Value, body);
             }
+            EmitWriteSets(methods.Select(m => m.Key).ToList(), body);
 
             var file = new CodeWriter(0);
             file.Line("// <auto-generated/>");
@@ -136,16 +173,115 @@ namespace ConventionMapper.SourceGenerator
             foreach (var _ in chain) file.Close();
             if (hasNamespace) file.Close();
 
-            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray(), BuildReport());
+            ReportUnmarkedConversions();
+            return new MapperResult(hintName, file.ToString(), _diagnostics.ToImmutableArray(), BuildReport(),
+                _mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
+        }
+
+        private static bool IsConversionShape(IMethodSymbol method) =>
+            method.IsStatic && !method.IsGenericMethod && method.Parameters.Length == 1 && !method.ReturnsVoid &&
+            method.Parameters[0].RefKind == RefKind.None && !method.ReturnsByRef && !method.ReturnsByRefReadonly && !method.IsImplicitlyDeclared;
+
+        private static bool HasAttribute(ISymbol symbol, string name) =>
+            symbol.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == name);
+
+        /// <summary>[GeneratedMapper(RequireMapConversion = ..., Provider = ...)] and class-level [MapAllowParse].</summary>
+        private void ReadClassSettings()
+        {
+            foreach (var attribute in _mapper.GetAttributes())
+            {
+                var name = attribute.AttributeClass?.ToDisplayString();
+                if (name == MapperGenerator.GeneratedMapperAttributeName)
+                {
+                    foreach (var argument in attribute.NamedArguments)
+                    {
+                        if (argument.Key == "RequireMapConversion" && argument.Value.Value is bool require) _requireMapConversion = require;
+                        else if (argument.Key == "Provider" && argument.Value.Value is string provider)
+                        {
+                            var known = ProjectionProvider.Normalize(provider);
+                            if (known != null) _provider = known;
+                            else _diagnostics.Add(Diagnostic.Create(Diagnostics.UnknownProvider, AttributeLocation(attribute), provider, ProjectionProvider.KnownList));
+                        }
+                    }
+                }
+                else if (name == MapperGenerator.MapAllowParseAttributeName)
+                {
+                    foreach (var member in StringArguments(attribute)) _classAllowParse.Add(member);
+                }
+            }
+        }
+
+        private Location AttributeLocation(AttributeData attribute) =>
+            attribute.ApplicationSyntaxReference?.GetSyntax(_ct).GetLocation() ?? _mapper.Locations.FirstOrDefault() ?? Location.None;
+
+        /// <summary>The string values of an attribute's constructor arguments, including params arrays.</summary>
+        private static IEnumerable<string> StringArguments(AttributeData attribute)
+        {
+            foreach (var argument in attribute.ConstructorArguments)
+            {
+                if (argument.Kind == TypedConstantKind.Array)
+                {
+                    foreach (var value in argument.Values)
+                        if (value.Value is string item) yield return item;
+                }
+                else if (argument.Value is string single)
+                {
+                    yield return single;
+                }
+            }
         }
 
         private void RegisterUserMap(IMethodSymbol method, bool overwrite = false)
         {
-            if (!method.IsStatic || method.IsGenericMethod || method.Parameters.Length != 1 || method.ReturnsVoid ||
-                method.Parameters[0].RefKind != RefKind.None || method.ReturnsByRef || method.IsImplicitlyDeclared) return;
+            if (!IsConversionShape(method)) return;
             var key = PairKey(method.Parameters[0].Type, method.ReturnType);
             if (overwrite || !_userMaps.ContainsKey(key)) _userMaps[key] = method;
             if (overwrite) _conversionMethods[key] = method;
+        }
+
+        /// <summary>
+        /// WriteSets: the destination members each mapping method sets (by "Name(ParameterTypes)", and by name alone when the
+        /// method has no overloads), so tests can compare a map's real behavior with what the generator wrote.
+        /// </summary>
+        private void EmitWriteSets(List<IMethodSymbol> methods, CodeWriter w)
+        {
+            if (methods.Count == 0 || !_mapper.GetMembers("WriteSets").IsEmpty) return;
+            var list = "global::System.Collections.Generic.IReadOnlyList<string>";
+            w.Line();
+            w.Line("/// <summary>The destination members each generated mapping method writes, by method (\"Name(ParameterTypes)\", or \"Name\" when it has no overloads).</summary>");
+            w.Line("internal static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, " + list + "> WriteSets =");
+            w.Indent();
+            w.Line("new global::System.Collections.Generic.Dictionary<string, " + list + ">(global::System.StringComparer.Ordinal)");
+            w.Line("{");
+            w.Indent();
+            var names = methods.GroupBy(m => m.Name).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            foreach (var method in methods)
+            {
+                var set = WriteSet(method);
+                var members = set.Count == 0
+                    ? "global::System.Array.Empty<string>()"
+                    : "new string[] { " + string.Join(", ", set.Select(m => SymbolDisplay.FormatLiteral(m, true))) + " }";
+                w.Line("[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "] = " + members + ",");
+                if (names[method.Name] == 1) w.Line("[" + SymbolDisplay.FormatLiteral(method.Name, true) + "] = " + members + ",");
+            }
+            w.Outdent();
+            w.Line("};");
+            w.Outdent();
+        }
+
+        /// <summary>CM0017 on every ordinary static method that was used as a conversion without [MapConversion].</summary>
+        private void ReportUnmarkedConversions()
+        {
+            foreach (var pair in _conversionUses.OrderBy(p => p.Key.Name, StringComparer.Ordinal))
+            {
+                var method = pair.Key;
+                if (_markedConversions.Contains(method) || IsPartialDefinition(method) || pair.Value.Count == 0) continue;
+                var members = pair.Value.Take(3).Select(m => "'" + m + "'").ToList();
+                var more = pair.Value.Count > 3 ? " and " + (pair.Value.Count - 3).ToString(CultureInfo.InvariantCulture) + " more" : string.Empty;
+                _diagnostics.Add(Diagnostic.Create(Diagnostics.UnmarkedConversionMethod,
+                    method.Locations.FirstOrDefault() ?? Location.None,
+                    method.Name, Short(method.Parameters[0].Type) + " to " + Short(method.ReturnType), string.Join(", ", members) + more));
+            }
         }
 
         private bool IsPartialDefinition(IMethodSymbol method)
@@ -188,16 +324,170 @@ namespace ConventionMapper.SourceGenerator
 
         // ================================================================== mapping methods
 
-        private void EmitMethod(IMethodSymbol method, MethodDeclarationSyntax syntax, CodeWriter w)
+        private void EmitMethod(IMethodSymbol method, MethodDeclarationSyntax syntax, CodeWriter output)
         {
             _location = syntax.Identifier.GetLocation();
             _current = method;
-            w.Open(Signature(method, syntax));
+            _rootSource = _rootDestination = null;
+            if (TryGetMapTypes(method, out var rootSource, out var rootDestination))
+            {
+                _rootSource = MemberResolver.IsNullableValueType(rootSource, out var underlying) ? underlying : rootSource;
+                _rootDestination = rootDestination;
+            }
+            WriteSet(method);
 
+            ReportNameofCandidates(method);
+            var w = new CodeWriter(_memberIndent);
+            w.Open(Signature(method, syntax));
+            EmitMethodBody(method, w);
+            w.Close();
+            FlushUnmapped(method);
+
+            // Optional XML docs listing where each member comes from (MSBuild: ConventionMapperGeneratedDocs=true).
+            foreach (var line in MethodDocs(method, syntax)) output.Line(DocMarker + line);
+            output.Raw(w.ToString());
+            _rootSource = _rootDestination = null;
+        }
+
+        // ------------------------------------------------------------------ diagnostics with IDE fixes
+
+        private readonly List<KeyValuePair<string, object[]>> _pendingUnmapped = new List<KeyValuePair<string, object[]>>();
+        private bool _pendingExplicitMode;
+
+        /// <summary>
+        /// CM0001. For the method's own destination the diagnostic is created after the method is generated, with the
+        /// properties the IDE fixes need: the member, whether the method is in explicit mode, and the members it writes.
+        /// </summary>
+        private void ReportUnmapped(string member, ITypeSymbol owner, ITypeSymbol source, MemberConfig config)
+        {
+            var args = new object[] { member, Short(owner), Short(source) };
+            var isRoot = _rootDestination != null && _rootSource != null &&
+                         SymbolEqualityComparer.Default.Equals(owner, _rootDestination) && SymbolEqualityComparer.Default.Equals(source, _rootSource);
+            if (!isRoot)
+            {
+                Report(Diagnostics.UnmappedMember, args);
+                return;
+            }
+            _pendingExplicitMode = config.ExplicitMode;
+            _pendingUnmapped.Add(new KeyValuePair<string, object[]>(member, args));
+        }
+
+        private void FlushUnmapped(IMethodSymbol method)
+        {
+            if (_pendingUnmapped.Count == 0) return;
+            var mapped = string.Join(",", WriteSet(method));
+            foreach (var pending in _pendingUnmapped)
+            {
+                var properties = ImmutableDictionary<string, string?>.Empty
+                    .Add("Member", pending.Key)
+                    .Add("ExplicitMode", _pendingExplicitMode ? "true" : "false")
+                    .Add("Mapped", mapped);
+                _diagnostics.Add(Diagnostic.Create(Diagnostics.UnmappedMember, _location, properties, pending.Value));
+            }
+            _pendingUnmapped.Clear();
+        }
+
+        /// <summary>CM0020 (hidden): a string in a mapping attribute that names a destination member and could be nameof(...).</summary>
+        private void ReportNameofCandidates(IMethodSymbol method)
+        {
+            if (!TryGetMapTypes(method, out _, out var destinationType) || !(destinationType is INamedTypeSymbol destination) ||
+                destination.IsGenericType || destination.IsAnonymousType || !IsAccessible(destination)) return;
+            var members = GetWritableMembers(destination, false);
+            foreach (var attribute in method.GetAttributes())
+            {
+                var name = attribute.AttributeClass?.ToDisplayString();
+                int[]? positions;
+                if (name == MapperGenerator.MapExplicitAttributeName || name == MapperGenerator.MapAllowParseAttributeName) positions = null; // all
+                else if (name == MapperGenerator.MapIgnoreAttributeName || name == MapperGenerator.MapNullSubstituteAttributeName) positions = new[] { 0 };
+                else if (name == MapperGenerator.MapMemberAttributeName) positions = new[] { 1 };
+                else continue;
+
+                if (!(attribute.ApplicationSyntaxReference?.GetSyntax(_ct) is AttributeSyntax syntax) || syntax.ArgumentList == null) continue;
+                var arguments = syntax.ArgumentList.Arguments;
+                for (var i = 0; i < arguments.Count; i++)
+                {
+                    if (positions != null && Array.IndexOf(positions, i) < 0) continue;
+                    if (arguments[i].NameEquals != null || arguments[i].NameColon != null) continue;
+                    if (!(arguments[i].Expression is LiteralExpressionSyntax literal) || !literal.IsKind(SyntaxKind.StringLiteralExpression)) continue;
+                    var text = literal.Token.ValueText;
+                    var member = members.FirstOrDefault(m => string.Equals(m.Name, text, StringComparison.Ordinal)) ??
+                                 members.FirstOrDefault(m => string.Equals(m.Name, text, StringComparison.OrdinalIgnoreCase));
+                    if (member == null || !IsAccessible(member)) continue;
+                    var properties = ImmutableDictionary<string, string?>.Empty
+                        .Add("Type", T(destination))
+                        .Add("Member", member.Name);
+                    _diagnostics.Add(Diagnostic.Create(Diagnostics.UseNameof, literal.GetLocation(), properties,
+                        Short(destination) + "." + member.Name, text));
+                }
+            }
+        }
+
+        /// <summary>Doc lines carry this prefix; the generator turns them into "///" comments or drops them, per the MSBuild option.</summary>
+        internal const string DocMarker = "//#cm-doc ";
+
+        /// <summary>
+        /// Docs for the implementation part. The implementation's docs replace the declaration's in the compiler output,
+        /// so the declaration's own comment is carried over, and the data flow goes into &lt;remarks&gt; (skipped when the
+        /// declaration already has remarks).
+        /// </summary>
+        private IEnumerable<string> MethodDocs(IMethodSymbol method, MethodDeclarationSyntax syntax)
+        {
+            var section = _flows.Values.FirstOrDefault(f => SymbolEqualityComparer.Default.Equals(f.Method, method));
+            var own = DeclarationDocs(syntax);
+            if (section == null)
+            {
+                foreach (var line in own) yield return line;
+                yield break;
+            }
+
+            var element = own.Count == 0 ? "summary" : "remarks";
+            foreach (var line in own) yield return line;
+            if (own.Any(l => l.IndexOf("<remarks", StringComparison.Ordinal) >= 0)) yield break;
+
+            yield return "<" + element + ">";
+            yield return "Generated by ConventionMapper. Data flow:";
+            yield return "<list type=\"table\">";
+            foreach (var row in section.Rows.Values)
+            {
+                // "| Destination | Source | Notes |" (Notes may be empty)
+                var inner = row.StartsWith("| ", StringComparison.Ordinal) && row.EndsWith(" |", StringComparison.Ordinal) ? row.Substring(2, row.Length - 4) : row;
+                var cells = inner.Split(new[] { " | " }, StringSplitOptions.None);
+                if (cells.Length < 3) continue;
+                var notes = cells[2].Trim();
+                yield return "<item><term>" + Xml(cells[0].Trim()) + "</term><description>" + Xml(cells[1].Trim().Trim('`')) +
+                             (notes.Length > 0 ? " (" + Xml(notes) + ")" : string.Empty) + "</description></item>";
+            }
+            yield return "</list>";
+            yield return "</" + element + ">";
+        }
+
+        /// <summary>The lines of the declaration's "///" comment, without the slashes.</summary>
+        private static List<string> DeclarationDocs(MethodDeclarationSyntax syntax)
+        {
+            var lines = new List<string>();
+            foreach (var trivia in syntax.GetLeadingTrivia())
+            {
+                // Without documentation parsing (DocumentationMode.None) "///" lines are ordinary comments.
+                if (!trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) && !trivia.IsKind(SyntaxKind.SingleLineCommentTrivia)) continue;
+                foreach (var raw in trivia.ToFullString().Split('\n'))
+                {
+                    var line = raw.TrimEnd('\r').TrimStart();
+                    if (!line.StartsWith("///", StringComparison.Ordinal)) continue;
+                    line = line.Substring(3);
+                    if (line.StartsWith(" ", StringComparison.Ordinal)) line = line.Substring(1);
+                    lines.Add(line);
+                }
+            }
+            return lines;
+        }
+
+        private static string Xml(string text) => text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+        private void EmitMethodBody(IMethodSymbol method, CodeWriter w)
+        {
             if (!method.IsGenericMethod && TryGetProjection(method, out var projectedSource, out var projectedDestination, out var isQueryable))
             {
                 EmitProjection(w, method, projectedSource, projectedDestination, isQueryable);
-                w.Close();
                 return;
             }
 
@@ -209,14 +499,18 @@ namespace ConventionMapper.SourceGenerator
             {
                 Report(Diagnostics.UnsupportedSignature, method.Name);
                 w.Line("throw new global::System.NotSupportedException(\"Unsupported mapping method signature.\");");
-                w.Close();
                 return;
             }
 
             var config = ReadConfig(method);
             var source = method.Parameters[0];
             // Extra parameters supply values for the destination members with the same name (or as [MapMember] sources).
-            foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2)) config.Parameters[extra.Name] = extra;
+            foreach (var extra in method.Parameters.Skip(isCreate ? 1 : 2))
+            {
+                config.Parameters[extra.Name] = extra;
+                // An overload that takes the value overrides an inherited [MapIgnore] for it.
+                if (!config.OwnIgnored.Contains(extra.Name)) config.Ignored.Remove(extra.Name);
+            }
             if (isCreate)
             {
                 EmitCreateBody(w, source.Type, method.ReturnType, Escape(source.Name), config, isRoot: true);
@@ -230,7 +524,6 @@ namespace ConventionMapper.SourceGenerator
             }
             foreach (var extra in config.Parameters.Values)
                 if (!config.UsedParameters.Contains(extra.Name)) Report(Diagnostics.UnusedParameter, extra.Name, method.Name);
-            w.Close();
         }
 
         private static string Signature(IMethodSymbol method, MethodDeclarationSyntax syntax)
@@ -253,38 +546,114 @@ namespace ConventionMapper.SourceGenerator
         {
             var config = new MemberConfig();
             foreach (var attribute in _mapper.GetAttributes()) ReadExplicit(attribute, config);
-            foreach (var attribute in method.GetAttributes())
+            ReadMethodConfig(method, config, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { method });
+            return config;
+        }
+
+        /// <summary>Applies the inherited method's configuration first ([MapInherit]), then this method's own attributes over it.</summary>
+        private void ReadMethodConfig(IMethodSymbol method, MemberConfig config, HashSet<IMethodSymbol> chain)
+        {
+            var own = chain.Count == 1; // the method being generated, not one it inherits from
+            var attributes = method.GetAttributes();
+            foreach (var attribute in attributes)
+            {
+                if (attribute.AttributeClass?.ToDisplayString() != MapperGenerator.MapInheritAttributeName) continue;
+                if (attribute.ConstructorArguments.Length != 1 || !(attribute.ConstructorArguments[0].Value is string inheritedName)) continue;
+                var inherited = FindInheritedMethod(method, inheritedName, attribute);
+                if (inherited == null) continue;
+                if (!chain.Add(inherited))
+                {
+                    ReportAt(Diagnostics.InvalidMapInherit, AttributeLocation(attribute), inheritedName, method.Name, "the methods inherit from each other in a cycle");
+                    continue;
+                }
+                ReadMethodConfig(inherited, config, chain);
+                chain.Remove(inherited);
+            }
+
+            foreach (var attribute in attributes)
             {
                 var name = attribute.AttributeClass?.ToDisplayString();
                 var args = attribute.ConstructorArguments;
                 if (name == MapperGenerator.MapIgnoreAttributeName && args.Length == 1 && args[0].Value is string ignored)
+                {
                     config.Ignored.Add(ignored);
+                    if (own) config.OwnIgnored.Add(ignored);
+                }
                 else if (name == MapperGenerator.MapMemberAttributeName && args.Length == 2 && args[0].Value is string from && args[1].Value is string to)
                     config.Explicit[to] = from;
                 else if (name == MapperGenerator.MapNullSubstituteAttributeName && args.Length == 2 && args[0].Value is string target)
                     config.NullSubstitutes[target] = args[1];
+                else if (name == MapperGenerator.MapAllowParseAttributeName)
+                    foreach (var allowed in StringArguments(attribute)) config.AllowParse.Add(allowed);
                 else
                     ReadExplicit(attribute, config);
             }
-            return config;
+        }
+
+        /// <summary>
+        /// The method named by [MapInherit]: another method of the mapper class with the same source and destination types.
+        /// Among overloads, the one with the fewest parameters wins (usually the plain map the others extend).
+        /// </summary>
+        private IMethodSymbol? FindInheritedMethod(IMethodSymbol method, string name, AttributeData attribute)
+        {
+            var location = AttributeLocation(attribute);
+            var candidates = _mapper.GetMembers(name).OfType<IMethodSymbol>()
+                .Where(m => m.MethodKind == MethodKind.Ordinary && !SymbolEqualityComparer.Default.Equals(m, method))
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name, "the mapper class has no other method named '" + name + "'");
+                return null;
+            }
+
+            if (!TryGetMapTypes(method, out var source, out var destination))
+                return null; // the method itself is reported as an unsupported signature
+
+            var matching = candidates
+                .Where(c => TryGetMapTypes(c, out var s, out var d) &&
+                            SymbolEqualityComparer.Default.Equals(s, source) && SymbolEqualityComparer.Default.Equals(d, destination))
+                .OrderBy(c => c.Parameters.Length)
+                .ToList();
+            if (matching.Count > 0) return matching[0];
+
+            var first = candidates[0];
+            var detail = TryGetMapTypes(first, out var otherSource, out var otherDestination)
+                ? "'" + name + "' maps " + Short(otherSource) + " to " + Short(otherDestination) + " but '" + method.Name + "' maps " + Short(source) + " to " + Short(destination) + "; the source and destination types must be the same"
+                : "'" + name + "' is not a mapping method";
+            ReportAt(Diagnostics.InvalidMapInherit, location, name, method.Name, detail);
+            return null;
+        }
+
+        /// <summary>Source and destination types of a create, update or projection method.</summary>
+        private static bool TryGetMapTypes(IMethodSymbol method, out ITypeSymbol source, out ITypeSymbol destination)
+        {
+            if (TryGetProjection(method, out source, out destination, out _)) return true;
+            if (method.Parameters.Length >= 1 && !method.ReturnsVoid)
+            {
+                source = method.Parameters[0].Type;
+                destination = method.ReturnType;
+                return true;
+            }
+            if (method.Parameters.Length >= 2 && method.ReturnsVoid)
+            {
+                source = method.Parameters[0].Type;
+                destination = method.Parameters[1].Type;
+                return true;
+            }
+            source = destination = null!;
+            return false;
         }
 
         private static void ReadExplicit(AttributeData attribute, MemberConfig config)
         {
             if (attribute.AttributeClass?.ToDisplayString() != MapperGenerator.MapExplicitAttributeName) return;
             config.ExplicitMode = true;
-            foreach (var argument in attribute.ConstructorArguments)
-            {
-                if (argument.Kind == TypedConstantKind.Array)
-                    foreach (var value in argument.Values) { if (value.Value is string listed) config.Listed.Add(listed); }
-                else if (argument.Value is string single)
-                    config.Listed.Add(single);
-            }
+            foreach (var listed in StringArguments(attribute)) config.Listed.Add(listed);
         }
 
         private void CheckConfigUsage(MemberConfig config, IMethodSymbol method, ITypeSymbol destination)
         {
-            if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0) return;
+            if (config.Ignored.Count == 0 && config.Explicit.Count == 0 && config.Listed.Count == 0 && config.NullSubstitutes.Count == 0 && config.AllowParse.Count == 0) return;
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (destination is INamedTypeSymbol named)
             {
@@ -300,6 +669,8 @@ namespace ConventionMapper.SourceGenerator
                 if (!known.Contains(listed)) Report(Diagnostics.UnknownAttributeMember, listed, "MapExplicit", method.Name);
             foreach (var pair in config.NullSubstitutes)
                 if (!known.Contains(pair.Key)) Report(Diagnostics.UnknownAttributeMember, pair.Key, "MapNullSubstitute", method.Name);
+            foreach (var allowed in config.AllowParse)
+                if (!known.Contains(allowed)) Report(Diagnostics.UnknownAttributeMember, allowed, "MapAllowParse", method.Name);
         }
 
         // ================================================================== bodies
@@ -428,6 +799,7 @@ namespace ConventionMapper.SourceGenerator
                 var args = new List<string>();
                 var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var chosenPaths = new List<KeyValuePair<IParameterSymbol, List<ISymbol>>>();
+                var chosenTraces = new List<Trace>();
                 var chosenParameters = new List<string>();
                 var ok = true;
                 foreach (var p in ctor.Parameters)
@@ -442,7 +814,7 @@ namespace ConventionMapper.SourceGenerator
                     string? value = null;
                     List<ISymbol>? path;
                     MemberAccess access = default;
-                    var fromParameter = ResolveParameter(source, p.Name, config, out var parameterPath, out var parameterAccess);
+                    var fromParameter = ResolveParameter(source, p.Name, destination, config, out var parameterPath, out var parameterAccess);
                     if (fromParameter == ParameterMatch.Invalid)
                     {
                         ok = false;
@@ -457,7 +829,7 @@ namespace ConventionMapper.SourceGenerator
                     {
                         path = config.Explicit.TryGetValue(p.Name, out var explicitPath)
                             ? _resolver.FindExplicitPath(source, explicitPath)
-                            : _resolver.FindPath(source, p.Name);
+                            : FindConventionPath(source, p.Name, destination, out _);
                         if (path != null) access = BuildPath(src, source, path);
                     }
                     if (path != null && path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
@@ -466,10 +838,12 @@ namespace ConventionMapper.SourceGenerator
                         Report(Diagnostics.SensitiveLeak, Describe(source, path, fromParameter), Short(destination) + "(" + p.Name + ")", p.Name);
                         path = null;
                     }
+                    var trace = new Trace();
                     if (path != null)
                     {
                         access = ApplyNullSubstitute(access, p.Name, p.Type, config);
-                        value = Convert(access.Type, p.Type, access.Expression, 0);
+                        var converted = access;
+                        value = Traced(() => Convert(converted.Type, p.Type, converted.Expression, 0), out trace);
                     }
                     if (value == null)
                     {
@@ -480,13 +854,19 @@ namespace ConventionMapper.SourceGenerator
                     args.Add(Escape(p.Name) + ": " + value);
                     used.Add(p.Name);
                     chosenPaths.Add(new KeyValuePair<IParameterSymbol, List<ISymbol>>(p, path!));
+                    chosenTraces.Add(trace);
                     if (fromParameter == ParameterMatch.Found) chosenParameters.Add(path![0].Name);
                 }
                 if (!ok) continue;
                 foreach (var name in chosenParameters) config.UsedParameters.Add(name);
-                foreach (var pair in chosenPaths)
-                    RecordFlow(source, destination, pair.Key.Name + " (constructor)", pair.Key, pair.Value,
-                        pair.Value[0] is IParameterSymbol ? "constructor parameter, method parameter" : "constructor parameter");
+                for (var i = 0; i < chosenPaths.Count; i++)
+                {
+                    var pair = chosenPaths[i];
+                    var notes = CommitTrace(chosenTraces[i], Describe(source, pair.Value, pair.Value[0] is IParameterSymbol ? ParameterMatch.Found : ParameterMatch.None),
+                        destination, pair.Key.Name, config, projection: false);
+                    notes.Insert(0, pair.Value[0] is IParameterSymbol ? "constructor parameter, method parameter" : "constructor parameter");
+                    RecordFlow(source, destination, pair.Key.Name + " (constructor)", pair.Key, pair.Value, notes);
+                }
                 arguments = args;
                 consumed = used;
                 return ctor;
@@ -535,7 +915,7 @@ namespace ConventionMapper.SourceGenerator
             var destinationName = destinationMember.Name;
             var destinationType = MemberResolver.TypeOf(destinationMember);
             List<ISymbol>? path;
-            var fromParameter = ResolveParameter(source, destinationName, config, out var parameterPath, out var parameterAccess);
+            var fromParameter = ResolveParameter(source, destinationName, owner, config, out var parameterPath, out var parameterAccess);
             if (fromParameter == ParameterMatch.Invalid) return null;
             if (fromParameter == ParameterMatch.Found)
             {
@@ -552,10 +932,10 @@ namespace ConventionMapper.SourceGenerator
             }
             else
             {
-                path = _resolver.FindPath(source, destinationName);
+                path = FindConventionPath(source, destinationName, owner, out var ambiguous);
                 if (path == null)
                 {
-                    Report(Diagnostics.UnmappedMember, destinationName, Short(owner), Short(source));
+                    if (!ambiguous) ReportUnmapped(destinationName, owner, source, config);
                     return null;
                 }
             }
@@ -569,7 +949,7 @@ namespace ConventionMapper.SourceGenerator
 
             var access = fromParameter == ParameterMatch.Found ? parameterAccess : BuildPath(src, source, path);
             access = ApplyNullSubstitute(access, destinationName, destinationType, config);
-            var value = Convert(access.Type, destinationType, access.Expression, 0);
+            var value = Traced(() => Convert(access.Type, destinationType, access.Expression, 0), out var trace);
             if (value == null)
             {
                 Report(Diagnostics.IncompatibleTypes, sourceName, Short(access.Type), Short(owner) + "." + destinationName, Short(destinationType), destinationName);
@@ -578,8 +958,77 @@ namespace ConventionMapper.SourceGenerator
             if (access.MayBeNull && !AcceptsNull(destinationType))
                 Report(Diagnostics.NullableToNonNullable, sourceName, Short(owner) + "." + destinationName);
             if (fromParameter == ParameterMatch.Found) config.UsedParameters.Add(path[0].Name);
-            RecordFlow(source, owner, destinationName, destinationMember, path, fromParameter == ParameterMatch.Found ? "method parameter" : null);
+            var notes = CommitTrace(trace, sourceName, owner, destinationName, config, projection: false);
+            if (fromParameter == ParameterMatch.Found) notes.Insert(0, "method parameter");
+            RecordFlow(source, owner, destinationName, destinationMember, path, notes);
             return value;
+        }
+
+        /// <summary>
+        /// Convention binding for a destination name. More than one possible source (a property and a Get-method, two members
+        /// differing only in case, or two flattenings) is error CM0015 rather than a silent pick; returns null then.
+        /// </summary>
+        private List<ISymbol>? FindConventionPath(ITypeSymbol source, string name, ITypeSymbol owner, out bool ambiguous)
+        {
+            ambiguous = false;
+            var candidates = _resolver.FindCandidatePaths(source, name);
+            if (candidates.Count == 0) return null;
+            if (candidates.Count == 1) return candidates[0];
+            ambiguous = true;
+            ReportAmbiguousSource(source, name, owner, candidates.Select(c => "'" + Short(source) + "." + PathText(c) + "'"));
+            return null;
+        }
+
+        private void ReportAmbiguousSource(ITypeSymbol source, string name, ITypeSymbol owner, IEnumerable<string> candidates)
+        {
+            if (_reportedAmbiguities.Add("source|" + _current?.Name + "|" + T(source) + "|" + T(owner) + "|" + name.ToUpperInvariant()))
+                Report(Diagnostics.AmbiguousSource, name, Short(owner), string.Join(" or ", candidates));
+        }
+
+        private static string PathText(IEnumerable<ISymbol> path) => string.Join(".", path.Select(m => m is IMethodSymbol ? m.Name + "()" : m.Name));
+
+        /// <summary>
+        /// Reports what the member's conversion did (CM0016 for parsing and narrowing, CM0021 for projection parts that may not
+        /// translate), records the conversion methods it used, and returns the notes for the data-flow report.
+        /// </summary>
+        private List<string> CommitTrace(Trace trace, string sourceName, ITypeSymbol owner, string destinationName, MemberConfig config, bool projection)
+        {
+            var notes = new List<string>();
+            var target = Short(owner) + "." + destinationName;
+            foreach (var method in trace.Methods.Distinct<IMethodSymbol>(SymbolEqualityComparer.Default))
+            {
+                if (!_conversionUses.TryGetValue(method, out var uses))
+                {
+                    uses = new SortedSet<string>(StringComparer.Ordinal);
+                    _conversionUses[method] = uses;
+                }
+                uses.Add(target);
+                notes.Add("via `" + method.Name + "()`");
+                if (projection && !ProjectionProvider.RunsInMemory(_provider))
+                    Report(Diagnostics.ProjectionClientEvaluation, _current?.Name ?? string.Empty, target,
+                        "the method '" + method.Name + "'", "EF Core runs in .NET after the query (only allowed in the final Select, never in a filter or sort)", destinationName);
+            }
+
+            var risks = trace.Risks.Distinct(StringComparer.Ordinal).ToList();
+            if (risks.Count > 0)
+            {
+                if (config.AllowParse.Contains(destinationName) || _classAllowParse.Contains(destinationName))
+                    notes.Add("parsed (allowed)");
+                else
+                {
+                    Report(Diagnostics.LossyConversion, sourceName, target, string.Join(" and ", risks), destinationName);
+                    notes.Add("⚠ " + string.Join(", ", risks));
+                    _riskyFlows.Add(target + ": " + string.Join(", ", risks));
+                }
+            }
+
+            foreach (var problem in trace.ClientRisks.Distinct(StringComparer.Ordinal))
+            {
+                var split = problem.IndexOf('|');
+                Report(Diagnostics.ProjectionClientEvaluation, _current?.Name ?? string.Empty, target, problem.Substring(0, split), problem.Substring(split + 1), destinationName);
+                notes.Add("⚠ may not translate");
+            }
+            return notes;
         }
 
         private enum ParameterMatch { None, Found, Invalid }
@@ -588,7 +1037,7 @@ namespace ConventionMapper.SourceGenerator
         /// An extra method parameter as the source of a destination member: a parameter with the member's name, or a
         /// [MapMember] path that starts with a parameter name ("policy" or "policy.Number").
         /// </summary>
-        private ParameterMatch ResolveParameter(ITypeSymbol source, string destinationName, MemberConfig config, out List<ISymbol> path, out MemberAccess access)
+        private ParameterMatch ResolveParameter(ITypeSymbol source, string destinationName, ITypeSymbol owner, MemberConfig config, out List<ISymbol> path, out MemberAccess access)
         {
             path = null!;
             access = default;
@@ -615,6 +1064,18 @@ namespace ConventionMapper.SourceGenerator
             else if (!config.Parameters.TryGetValue(destinationName, out parameter))
             {
                 return ParameterMatch.None;
+            }
+            else
+            {
+                // A parameter wins over a source member with the destination's own name (the caller supplies it on purpose),
+                // but not over a flattening such as "CustomerName" -> Customer.Name: that is a guess either way.
+                var candidates = _resolver.FindCandidatePaths(source, destinationName);
+                if (candidates.Count > 0 && candidates.All(c => c.Count > 1))
+                {
+                    ReportAmbiguousSource(source, destinationName, owner,
+                        new[] { "the parameter '" + parameter.Name + "'" }.Concat(candidates.Select(c => "'" + Short(source) + "." + PathText(c) + "'")));
+                    return ParameterMatch.Invalid;
+                }
             }
 
             var members = new List<ISymbol>();
@@ -743,7 +1204,10 @@ namespace ConventionMapper.SourceGenerator
             // (but a method never calls itself for its own root conversion).
             if (_userMaps.TryGetValue(PairKey(s, d), out var userMethod) &&
                 !(depth == 0 && SymbolEqualityComparer.Default.Equals(userMethod, _current) && _atRoot))
+            {
+                _trace?.Methods.Add(userMethod);
                 return Escape(userMethod.Name) + "(" + expr + ")";
+            }
 
             var conversion = _compilation.ClassifyConversion(s, d);
             if (conversion.Exists && conversion.IsImplicit) return expr;
@@ -774,18 +1238,28 @@ namespace ConventionMapper.SourceGenerator
 
             if (s.TypeKind == TypeKind.Enum && d.TypeKind == TypeKind.Enum) return EnumHelper((INamedTypeSymbol)s, (INamedTypeSymbol)d) + "(" + expr + ")";
             if (s.SpecialType == SpecialType.System_String && d.TypeKind == TypeKind.Enum)
+            {
+                AddRisk("Enum.Parse");
                 return "(" + T(d) + ")global::System.Enum.Parse(typeof(" + T(d) + "), " + expr + ", true)";
+            }
             if ((s.TypeKind == TypeKind.Enum && IsIntegral(d)) || (IsIntegral(s) && d.TypeKind == TypeKind.Enum))
                 return "(" + T(d) + ")(" + expr + ")";
 
             if (s.SpecialType == SpecialType.System_String)
             {
                 var parse = ParseCall(d, expr);
-                if (parse != null) return parse;
+                if (parse != null)
+                {
+                    AddRisk(Short(d) + ".Parse");
+                    return parse;
+                }
             }
 
             if (conversion.Exists && conversion.IsExplicit && conversion.IsNumeric)
+            {
+                AddRisk("a narrowing cast (" + Short(s) + " to " + Short(d) + ")");
                 return "checked((" + T(d) + ")(" + expr + "))";
+            }
 
             var kind = GetCollectionKind(d);
             var sourceElement = ElementTypeOf(s);
@@ -800,6 +1274,8 @@ namespace ConventionMapper.SourceGenerator
 
             return null;
         }
+
+        private void AddRisk(string conversion) => _trace?.Risks.Add(conversion);
 
         private static string? ParseCall(ITypeSymbol d, string expr)
         {
@@ -878,7 +1354,24 @@ namespace ConventionMapper.SourceGenerator
         private string? CollectionHelper(ITypeSymbol source, ITypeSymbol destination, ITypeSymbol sourceElement, CollectionKind kind, int depth)
         {
             var key = "collection:" + PairKey(source, destination);
-            if (_helperNames.TryGetValue(key, out var existing)) return existing;
+            if (_helperNames.TryGetValue(key, out var existing))
+            {
+                if (_helperTraces.TryGetValue(existing, out var cached)) _trace?.MergeFrom(cached);
+                return existing;
+            }
+            var outer = _trace;
+            var name = Traced(() => BuildCollectionHelper(source, destination, sourceElement, kind, depth, key), out var helperTrace);
+            _trace = outer;
+            if (name != null)
+            {
+                _helperTraces[name] = helperTrace;
+                outer?.MergeFrom(helperTrace);
+            }
+            return name;
+        }
+
+        private string? BuildCollectionHelper(ITypeSymbol source, ITypeSymbol destination, ITypeSymbol sourceElement, CollectionKind kind, int depth, string key)
+        {
 
             var w = new CodeWriter(_memberIndent);
             var sourceDefinition = source is INamedTypeSymbol sn ? sn.OriginalDefinition.ToDisplayString() : string.Empty;
@@ -1052,12 +1545,14 @@ namespace ConventionMapper.SourceGenerator
             foreach (var ctor in destination.InstanceConstructors.Where(c => IsAccessible(c) && !IsCopyConstructor(c, destination)).OrderByDescending(c => c.Parameters.Length))
             {
                 var args = new List<string>();
+                var paths = new List<List<ISymbol>>();
+                var traces = new List<Trace>();
                 var ok = true;
                 foreach (var p in ctor.Parameters)
                 {
                     var path = config.Ignored.Contains(p.Name) || !config.Includes(p.Name) ? null
                         : config.Explicit.TryGetValue(p.Name, out var explicitPath) ? _resolver.FindExplicitPath(source, explicitPath)
-                        : _resolver.FindPath(source, p.Name);
+                        : FindConventionPath(source, p.Name, destination, out _);
                     if (path == null || (path.Any(MemberResolver.IsSensitive) && !MemberResolver.IsSensitive(p) &&
                                          !destination.GetMembers().Any(m => string.Equals(m.Name, p.Name, StringComparison.OrdinalIgnoreCase) && MemberResolver.IsSensitive(m))))
                     {
@@ -1065,21 +1560,25 @@ namespace ConventionMapper.SourceGenerator
                         break;
                     }
                     var projected = ProjectionSubstitute(ProjectionPath(src, path), MemberResolver.TypeOf(path[path.Count - 1]), p.Name, config, out var projectedType);
-                    var value = ProjectionValue(projectedType, p.Type, projected, depth, stack);
+                    var value = Traced(() => ProjectionValue(projectedType, p.Type, projected, depth, stack), out var trace);
                     if (value == null)
                     {
                         ok = false;
                         break;
                     }
                     args.Add(value);
+                    paths.Add(path);
+                    traces.Add(trace);
                 }
                 if (!ok) continue;
                 chosen = ctor;
                 arguments = args;
-                foreach (var p in ctor.Parameters)
+                for (var i = 0; i < ctor.Parameters.Length; i++)
                 {
-                    var used = config.Explicit.TryGetValue(p.Name, out var explicitUsed) ? _resolver.FindExplicitPath(source, explicitUsed) : _resolver.FindPath(source, p.Name);
-                    if (used != null) RecordFlow(source, destination, p.Name + " (constructor)", p, used, "projection, constructor parameter");
+                    var p = ctor.Parameters[i];
+                    var notes = CommitTrace(traces[i], Short(source) + "." + PathText(paths[i]), destination, p.Name, config, projection: true);
+                    notes.Insert(0, "projection, constructor parameter");
+                    RecordFlow(source, destination, p.Name + " (constructor)", p, paths[i], notes);
                 }
                 foreach (var p in ctor.Parameters) consumed.Add(p.Name);
                 break;
@@ -1124,10 +1623,10 @@ namespace ConventionMapper.SourceGenerator
             }
             else
             {
-                path = _resolver.FindPath(source, name);
+                path = FindConventionPath(source, name, owner, out var ambiguous);
                 if (path == null)
                 {
-                    Report(Diagnostics.UnmappedMember, name, Short(owner), Short(source));
+                    if (!ambiguous) ReportUnmapped(name, owner, source, config);
                     return null;
                 }
             }
@@ -1141,9 +1640,15 @@ namespace ConventionMapper.SourceGenerator
 
             var destinationType = MemberResolver.TypeOf(destinationMember);
             var expression = ProjectionSubstitute(ProjectionPath(src, path), MemberResolver.TypeOf(path[path.Count - 1]), name, config, out var valueType);
-            var value = ProjectionValue(valueType, destinationType, expression, depth, stack);
-            if (value == null) Report(Diagnostics.IncompatibleTypes, sourceName, Short(valueType), Short(owner) + "." + name, Short(destinationType), name);
-            else RecordFlow(source, owner, name, destinationMember, path, "projection");
+            var value = Traced(() => ProjectionValue(valueType, destinationType, expression, depth, stack), out var trace);
+            if (value == null)
+            {
+                Report(Diagnostics.IncompatibleTypes, sourceName, Short(valueType), Short(owner) + "." + name, Short(destinationType), name);
+                return null;
+            }
+            var notes = CommitTrace(trace, sourceName, owner, name, config, projection: true);
+            notes.Insert(0, "projection");
+            RecordFlow(source, owner, name, destinationMember, path, notes);
             return value;
         }
 
@@ -1172,7 +1677,11 @@ namespace ConventionMapper.SourceGenerator
         {
             if (depth > 8) return null;
             if (SymbolEqualityComparer.Default.Equals(s, d)) return expr;
-            if (_conversionMethods.TryGetValue(PairKey(s, d), out var method)) return Escape(method.Name) + "(" + expr + ")";
+            if (_conversionMethods.TryGetValue(PairKey(s, d), out var method))
+            {
+                _trace?.Methods.Add(method);
+                return Escape(method.Name) + "(" + expr + ")";
+            }
 
             var conversion = _compilation.ClassifyConversion(s, d);
             if (conversion.Exists && conversion.IsImplicit) return expr;
@@ -1183,6 +1692,8 @@ namespace ConventionMapper.SourceGenerator
             if (d.SpecialType == SpecialType.System_String)
             {
                 if (!IsScalar(sUnderlying)) return null;
+                var problem = ProjectionProvider.ToStringProblem(_provider, sUnderlying);
+                if (problem != null) _trace?.ClientRisks.Add("ToString() on " + Short(sUnderlying) + "|" + problem);
                 return sIsNullable ? "(" + expr + " == null ? null : " + expr + ".Value.ToString())" : expr + ".ToString()";
             }
             if (sIsNullable && dIsNullable)
@@ -1199,7 +1710,11 @@ namespace ConventionMapper.SourceGenerator
 
             if (s.TypeKind == TypeKind.Enum && d.TypeKind == TypeKind.Enum) return ProjectionEnum((INamedTypeSymbol)s, (INamedTypeSymbol)d, expr);
             if ((s.TypeKind == TypeKind.Enum && IsIntegral(d)) || (IsIntegral(s) && d.TypeKind == TypeKind.Enum)) return "(" + T(d) + ")(" + expr + ")";
-            if (conversion.Exists && conversion.IsExplicit && conversion.IsNumeric) return "(" + T(d) + ")(" + expr + ")";
+            if (conversion.Exists && conversion.IsExplicit && conversion.IsNumeric)
+            {
+                AddRisk("a narrowing cast (" + Short(s) + " to " + Short(d) + ")");
+                return "(" + T(d) + ")(" + expr + ")";
+            }
 
             var kind = GetCollectionKind(d);
             var sourceElement = ElementTypeOf(s);
@@ -1342,40 +1857,120 @@ namespace ConventionMapper.SourceGenerator
 
         // ================================================================== data-flow report
 
-        private SortedDictionary<string, string> RecordMap(ITypeSymbol source, ITypeSymbol destination)
+        /// <summary>One table of the report: a mapping method (overloads are grouped by name) or a nested type pair.</summary>
+        private sealed class FlowSection
         {
-            var key = "`" + Short(source) + "` → `" + Short(destination) + "`";
-            if (!_flows.TryGetValue(key, out var rows))
+            public FlowSection(string heading, IMethodSymbol? method)
             {
-                rows = new SortedDictionary<string, string>(StringComparer.Ordinal);
-                _flows[key] = rows;
+                Heading = heading;
+                Method = method;
+            }
+
+            public string Heading { get; }
+
+            /// <summary>The mapping method this section belongs to; null for nested maps.</summary>
+            public IMethodSymbol? Method { get; }
+            public SortedDictionary<string, string> Rows { get; } = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        private static readonly SymbolDisplayFormat MethodDisplayFormat = new SymbolDisplayFormat(
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameOnly,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
+            memberOptions: SymbolDisplayMemberOptions.IncludeParameters,
+            parameterOptions: SymbolDisplayParameterOptions.IncludeType,
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes | SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
+
+        /// <summary>"ToImportData(LocationData, string?, decimal?)": how a method is named in the report and in WriteSets.</summary>
+        private static string MethodDisplay(IMethodSymbol method) => method.ToDisplayString(MethodDisplayFormat);
+
+        private FlowSection RecordMap(ITypeSymbol source, ITypeSymbol destination)
+        {
+            string key;
+            FlowSection? section;
+            var isRoot = _current != null && _rootSource != null && _rootDestination != null &&
+                         SymbolEqualityComparer.Default.Equals(source, _rootSource) && SymbolEqualityComparer.Default.Equals(destination, _rootDestination);
+            if (isRoot)
+            {
+                key = "1|" + _current!.Name + "|" + _methodOrder[_current].ToString("D4", CultureInfo.InvariantCulture);
+                if (!_flows.TryGetValue(key, out section))
+                {
+                    section = new FlowSection("`" + MethodDisplay(_current) + "` → `" + Short(destination) + "`", _current);
+                    _flows[key] = section;
+                }
+            }
+            else
+            {
+                key = "2|`" + Short(source) + "` → `" + Short(destination) + "`";
+                if (!_flows.TryGetValue(key, out section))
+                {
+                    section = new FlowSection(key.Substring(2), null);
+                    _flows[key] = section;
+                }
             }
             foreach (var member in _resolver.GetReadableMembers(source))
                 if (MemberResolver.IsSensitive(member)) SensitiveTargets(member);
-            return rows;
+            return section;
         }
 
         private void RecordIgnored(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
-            RecordMap(source, destination)[member.Name] =
+            RecordMap(source, destination).Rows[member.Name] =
                 "| " + DestinationCell(member.Name, member) + " | — | ignored |";
 
         private void RecordSkipped(ITypeSymbol source, ITypeSymbol destination, ISymbol member) =>
-            RecordMap(source, destination)[member.Name] =
+            RecordMap(source, destination).Rows[member.Name] =
                 "| " + DestinationCell(member.Name, member) + " | — | not listed ([MapExplicit]) |";
 
-        private void RecordFlow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, List<ISymbol> path, string? note)
+        private void RecordFlow(ITypeSymbol source, ITypeSymbol destination, string destinationName, ISymbol destinationSymbol, List<ISymbol> path, IEnumerable<string>? extraNotes)
         {
             var notes = new List<string>();
-            if (note != null) notes.Add(note);
-            if (path.Count > 1) notes.Add("flattened");
+            if (extraNotes != null) notes.AddRange(extraNotes);
+            if (path.Count > 1 && !(path[0] is IParameterSymbol)) notes.Add("flattened");
+            var memberName = DestinationMemberName(destination, destinationName);
             foreach (var member in path.Where(MemberResolver.IsSensitive))
             {
                 notes.Add("sensitive");
-                SensitiveTargets(member).Add(Short(destination) + "." + destinationName.Replace(" (constructor)", string.Empty));
+                SensitiveTargets(member).Add(Short(destination) + "." + memberName);
             }
-            var description = "`" + string.Join(".", path.Select(m => m is IMethodSymbol ? m.Name + "()" : m.Name)) + "`";
-            RecordMap(source, destination)[destinationName] =
+            if (IsKeyLike(destination, memberName))
+            {
+                notes.Add("⚠ key");
+                _riskyFlows.Add("`" + Short(destination) + "." + memberName + "` (key) is written from `" + PathText(path) + "`");
+            }
+            var description = "`" + PathText(path) + "`";
+            var section = RecordMap(source, destination);
+            section.Rows[destinationName] =
                 "| " + DestinationCell(destinationName, destinationSymbol) + " | " + description + " | " + string.Join(", ", notes) + " |";
+            if (section.Method != null) WriteSet(section.Method).Add(memberName);
+        }
+
+        /// <summary>"firstName (constructor)" -> "FirstName" when the destination has a member with that name.</summary>
+        private string DestinationMemberName(ITypeSymbol destination, string destinationName)
+        {
+            var name = destinationName.Replace(" (constructor)", string.Empty);
+            if (destination is INamedTypeSymbol named)
+                foreach (var member in GetWritableMembers(named, false).Concat(_resolver.GetReadableMembers(named)))
+                    if (string.Equals(member.Name, name, StringComparison.OrdinalIgnoreCase)) return member.Name;
+            return name;
+        }
+
+        /// <summary>Id, ID, Key, CustomerId, IntId, or a member marked [Key]: writing one by convention deserves a reviewer's eye.</summary>
+        private static bool IsKeyLike(ITypeSymbol owner, string memberName)
+        {
+            if (memberName == "Id" || memberName == "ID" || memberName == "Key") return true;
+            if (memberName.Length > 2 && (memberName.EndsWith("Id", StringComparison.Ordinal) || memberName.EndsWith("ID", StringComparison.Ordinal))) return true;
+            foreach (var member in owner.GetMembers(memberName))
+                if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "KeyAttribute")) return true;
+            return false;
+        }
+
+        private SortedSet<string> WriteSet(IMethodSymbol method)
+        {
+            if (!_writeSets.TryGetValue(method, out var set))
+            {
+                set = new SortedSet<string>(StringComparer.Ordinal);
+                _writeSets[method] = set;
+            }
+            return set;
         }
 
         private static string DestinationCell(string name, ISymbol symbol) => MemberResolver.IsSensitive(symbol) ? name + " (sensitive)" : name;
@@ -1397,6 +1992,14 @@ namespace ConventionMapper.SourceGenerator
             if (_flows.Count == 0) return null;
             var sb = new StringBuilder();
             sb.Append("## `").Append(_mapper.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)).AppendLine("`").AppendLine();
+
+            if (_riskyFlows.Count > 0)
+            {
+                sb.AppendLine("Review first:").AppendLine();
+                foreach (var risky in _riskyFlows) sb.Append("- ").AppendLine(risky);
+                sb.AppendLine();
+            }
+
             if (_sensitive.Count > 0)
             {
                 sb.AppendLine("Sensitive members:").AppendLine();
@@ -1409,17 +2012,46 @@ namespace ConventionMapper.SourceGenerator
                 }
                 sb.AppendLine();
             }
-            foreach (var map in _flows)
+
+            if (_conversionUses.Count > 0)
             {
-                sb.Append("### ").AppendLine(map.Key).AppendLine();
-                if (map.Value.Count == 0)
+                sb.AppendLine("Conversion methods:").AppendLine();
+                sb.AppendLine("| Method | Converts | Used for |");
+                sb.AppendLine("| --- | --- | --- |");
+                foreach (var pair in _conversionUses.OrderBy(p => p.Key.Name, StringComparer.Ordinal).ThenBy(p => MethodDisplay(p.Key), StringComparer.Ordinal))
+                {
+                    var marked = _markedConversions.Contains(pair.Key) ? " ([MapConversion])" : IsPartialDefinition(pair.Key) ? " (mapping method)" : string.Empty;
+                    sb.Append("| `").Append(pair.Key.Name).Append("()`").Append(marked)
+                      .Append(" | ").Append(Short(pair.Key.Parameters[0].Type)).Append(" → ").Append(Short(pair.Key.ReturnType))
+                      .Append(" | ").Append(string.Join(", ", pair.Value.Select(v => "`" + v + "`"))).AppendLine(" |");
+                }
+                sb.AppendLine();
+            }
+
+            string? group = null;
+            var nestedStarted = false;
+            foreach (var pair in _flows)
+            {
+                var section = pair.Value;
+                if (section.Method != null && section.Method.Name != group)
+                {
+                    group = section.Method.Name;
+                    sb.Append("### ").AppendLine(group).AppendLine();
+                }
+                else if (section.Method == null && !nestedStarted)
+                {
+                    nestedStarted = true;
+                    sb.AppendLine("### Nested maps").AppendLine();
+                }
+                sb.Append("#### ").AppendLine(section.Heading).AppendLine();
+                if (section.Rows.Count == 0)
                 {
                     sb.AppendLine("Converted as a whole (no member-by-member flows).").AppendLine();
                     continue;
                 }
                 sb.AppendLine("| Destination | Source | Notes |");
                 sb.AppendLine("| --- | --- | --- |");
-                foreach (var row in map.Value.Values) sb.AppendLine(row);
+                foreach (var row in section.Rows.Values) sb.AppendLine(row);
                 sb.AppendLine();
             }
             return sb.ToString();
@@ -1452,11 +2084,17 @@ namespace ConventionMapper.SourceGenerator
         private void Report(DiagnosticDescriptor descriptor, params object[] args) =>
             _diagnostics.Add(Diagnostic.Create(descriptor, _location, args));
 
+        private void ReportAt(DiagnosticDescriptor descriptor, Location location, params object[] args) =>
+            _diagnostics.Add(Diagnostic.Create(descriptor, location, args));
+
         private sealed class MemberConfig
         {
             public static readonly MemberConfig Empty = new MemberConfig();
 
             public HashSet<string> Ignored { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>[MapIgnore] on the method itself (not inherited through [MapInherit]).</summary>
+            public HashSet<string> OwnIgnored { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, string> Explicit { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>[MapExplicit]: only listed, [MapMember] and parameter-supplied members are set.</summary>
@@ -1468,8 +2106,45 @@ namespace ConventionMapper.SourceGenerator
             public Dictionary<string, IParameterSymbol> Parameters { get; } = new Dictionary<string, IParameterSymbol>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> UsedParameters { get; } = new HashSet<string>(StringComparer.Ordinal);
 
+            /// <summary>[MapAllowParse]: destination members allowed to use parsing or narrowing conversions.</summary>
+            public HashSet<string> AllowParse { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             public bool Includes(string member) =>
                 !ExplicitMode || Listed.Contains(member) || Explicit.ContainsKey(member) || Parameters.ContainsKey(member);
+        }
+
+        /// <summary>What converting one value did: conversions that can fail or lose data, and the user methods called.</summary>
+        private sealed class Trace
+        {
+            public List<string> Risks { get; } = new List<string>();
+
+            /// <summary>Projection-only: parts that may not translate to SQL (methods are tracked in <see cref="Methods"/>).</summary>
+            public List<string> ClientRisks { get; } = new List<string>();
+            public List<IMethodSymbol> Methods { get; } = new List<IMethodSymbol>();
+
+            public void MergeFrom(Trace other)
+            {
+                Risks.AddRange(other.Risks);
+                ClientRisks.AddRange(other.ClientRisks);
+                Methods.AddRange(other.Methods);
+            }
+        }
+
+        /// <summary>Runs a value conversion with a fresh trace, so its findings belong to one destination member.</summary>
+        private string? Traced(Func<string?> convert, out Trace trace)
+        {
+            var outer = _trace;
+            var inner = new Trace();
+            _trace = inner;
+            try
+            {
+                return convert();
+            }
+            finally
+            {
+                _trace = outer;
+                trace = inner;
+            }
         }
     }
 

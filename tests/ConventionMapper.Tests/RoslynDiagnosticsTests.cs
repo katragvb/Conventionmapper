@@ -34,7 +34,10 @@ namespace ConventionMapper.Tests
         {
             GeneratorDriver driver = CSharpGeneratorDriver.Create(new[] { new MapperGenerator().AsSourceGenerator() }, parseOptions: ParseOptions);
             driver = driver.RunGeneratorsAndUpdateCompilation(Compile(code), out var output, out var diagnostics);
-            var source = string.Join("\n", driver.GetRunResult().GeneratedTrees.Select(t => t.ToString()));
+            // The mapper code and the report; the attribute declarations (with their doc comments) are left out.
+            var source = string.Join("\n", driver.GetRunResult().GeneratedTrees
+                .Where(t => !t.FilePath.EndsWith("ConventionMapper.Attributes.g.cs", StringComparison.Ordinal))
+                .Select(t => t.ToString()));
             var errors = output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToImmutableArray();
             return (diagnostics, errors, source);
         }
@@ -95,7 +98,7 @@ public class Dest { public int Id { get; set; } public string Address { get; set
 [GeneratedMapper] public static partial class M
 {
     public static partial Dest Map(Source s);
-    private static string Describe(Address a) => a.City;
+    [MapConversion] private static string Describe(Address a) => a.City;
 }");
 
             Assert.DoesNotContain(result.Generator, d => d.Severity >= DiagnosticSeverity.Warning);

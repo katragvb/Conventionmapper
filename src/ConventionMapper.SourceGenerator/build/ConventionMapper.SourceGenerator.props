@@ -1,0 +1,6 @@
+<Project>
+  <!-- Lets the source generator read <ConventionMapperGeneratedDocs>true</ConventionMapperGeneratedDocs>. -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="ConventionMapperGeneratedDocs" />
+  </ItemGroup>
+</Project>
