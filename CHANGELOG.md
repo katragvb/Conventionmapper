@@ -6,8 +6,13 @@
 - `config.DataFlowReport()` returns a Markdown report of every map: where each destination member gets its value (matching name, flattened path, computed, ignored, not mapped) and every place a `[Sensitive]` member is copied to. Useful for code reviews and privacy audits.
 - The source generator writes the same report for the `[GeneratedMapper]` classes of each assembly into `ConventionMapper.Generated.DataFlowReport.Markdown`, so it is known at build time.
 
+### Source generator: safer mappings
+- **Extra parameters.** `Gap ToGap(this Referral r, int submissionNumber, Policy? policy)`: extra parameters set the destination members (or constructor parameters) with the same name, and `[MapMember("policy.Number", "PolicyNumber")]` can start at a parameter. The object is built in one place and a missing value is a compile error. Works for update methods too. An unused parameter is error CM0011.
+- **Explicit mode.** `[MapExplicit("Id", "Name")]` on a method, or `[MapExplicit]` on the mapper class, sets only the listed members, `[MapMember]` entries and parameters; everything else keeps its default. A member added later is never copied silently, and no `[MapIgnore]` lists are needed.
+- **Null substitutes.** `[MapNullSubstitute("Status", "")]` writes `source.Status ?? ""` (`COALESCE` in projections). Warning CM0012 when the source can't be null, error CM0013 for a constant of the wrong type.
+
 ### "Generate build-time mapper" refactoring
-- On a `CreateMap<TSource, TDestination>()` call, the IDE offers to add a new file with the equivalent `[GeneratedMapper]` class. `Ignore()`, `MapFrom(s => s.A.B)`, `MapFrom("A.B")` and `ReverseMap()` are translated; anything else is listed at the top of the file to convert by hand.
+- On a `CreateMap<TSource, TDestination>()` call, the IDE offers to add a new file with the equivalent `[GeneratedMapper]` class. `Ignore()`, `MapFrom(s => s.A.B)`, `MapFrom("A.B")`, `NullSubstitute(constant)` and `ReverseMap()` are translated; anything else is listed at the top of the file to convert by hand.
 
 ### Tests
 - The IDE quick fixes (CM1001, CM1002) and the refactoring are tested in a Roslyn workspace.
