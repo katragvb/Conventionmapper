@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./build.sh [version]        e.g. ./build.sh 1.2.3 (default: the <Version> in the .csproj files)
-# Restores, builds, tests and packs ConventionMapper and ConventionMapper.SourceGenerator into ./artifacts
+# Restores, builds, tests and packs ConventionMapper, ConventionMapper.SourceGenerator and ConventionMapper.Testing into ./artifacts
 set -euo pipefail
 VERSION_ARG=()
 if [ $# -gt 0 ]; then VERSION_ARG=(-p:Version="$1"); fi
@@ -11,6 +11,7 @@ dotnet build ConventionMapper.sln -c Release --no-restore ${VERSION_ARG[@]+"${VE
 dotnet test tests/ConventionMapper.Tests/ConventionMapper.Tests.csproj -c Release --no-build
 dotnet pack src/ConventionMapper/ConventionMapper.csproj -c Release --no-build ${VERSION_ARG[@]+"${VERSION_ARG[@]}"} -o artifacts
 dotnet pack src/ConventionMapper.SourceGenerator/ConventionMapper.SourceGenerator.csproj -c Release --no-build ${VERSION_ARG[@]+"${VERSION_ARG[@]}"} -o artifacts
+dotnet pack src/ConventionMapper.Testing/ConventionMapper.Testing.csproj -c Release --no-build ${VERSION_ARG[@]+"${VERSION_ARG[@]}"} -o artifacts
 
 echo
 echo "Packages written to ./artifacts:"

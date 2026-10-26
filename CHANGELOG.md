@@ -1,9 +1,47 @@
 # Changelog
 
-## 1.7.1 (unreleased)
+## 1.8.0 (unreleased)
 
-### Fixes
-- Source generator: a `[MapMember]` source path that matched both a source member and a method parameter (case-insensitively, e.g. `"CreateUser"` and `createUser`) was bound to the parameter without a warning, which could generate wrong code such as `int.Parse(createUser)`. This is now error CM0014. Implicit matching is unchanged: a parameter still sets the destination member with its own name.
+Changes from migrating a large codebase (GARS) to the source generator.
+
+**Upgrading:** projects with `TreatWarningsAsErrors` may see new warnings fail the build: mark intended conversion methods `[MapConversion]` (CM0017), allow intended parsing with `[MapAllowParse]` (CM0016), and re-record data-flow report snapshots (new format). New ambiguity errors (CM0015) point at bindings that were guesses before.
+
+### Source generator: silent-wrong-code guards
+- **Ambiguous bindings are errors (CM0015).** A destination member that matches a property and a `Get` method (`Total` / `GetTotal()`), two members differing only in case, two flattenings (`Billing.AddressCity` / `BillingAddress.City`), or a parameter and a flattened path (`customerName` / `Customer.Name`) used to bind silently to one of them. Choose with `[MapMember]`. A parameter still wins over a source member with the destination's own name. Explicit paths now prefer an exact-case match.
+- **Parsing and narrowing conversions are warnings (CM0016).** `int.Parse`, `Enum.Parse` and `checked` narrowing casts (`long` → `int`) can throw or lose data at runtime. Allow them per member with `[MapAllowParse("Code")]` on the method or class. A root conversion method (`int Map(string)`) is not flagged.
+- **Conversion-method trap (CM0017).** A one-argument static method in a `[GeneratedMapper]` class is still used as a conversion wherever its types meet, but now warns until it is marked `[MapConversion]`. `[GeneratedMapper(RequireMapConversion = true)]` uses only marked methods. A `[MapConversion]` method of the wrong shape is error CM0018.
+- **Error CM0014** (from the unreleased 1.7.1): a `[MapMember]` source path that matched both a source member and a method parameter (case-insensitively, e.g. `"CreateUser"` and `createUser`) was bound to the parameter, which could generate wrong code such as `int.Parse(createUser)`.
+
+### Source generator: shared configuration
+- **`[MapInherit(nameof(ToImportData))]`** reuses another method's `[MapExplicit]`, `[MapMember]`, `[MapIgnore]`, `[MapNullSubstitute]` and `[MapAllowParse]`, for example on an overload with extra parameters. The method's own attributes are added and win; a parameter overrides an inherited `[MapIgnore]` for its member. Different source or destination types, an unknown name or a cycle is error CM0019. Projections can inherit from create methods.
+
+### Source generator: projections
+- **Warning CM0021** for projection parts EF Core can't translate to SQL or runs on the client: custom conversion methods, and `ToString()` on dates, floating-point numbers, decimals, booleans and enums.
+- **`[GeneratedMapper(Provider = "SqlServer")]`** (also `PostgreSql`, `Sqlite`, `Cosmos`, `InMemory`) tunes those warnings to the provider: none for `InMemory`, more for `Cosmos`. The generated expressions are the same for every provider. Unknown names are warning CM0022.
+
+### Data-flow report
+- **Sections per mapping method**, with overloads grouped under one heading and nested type pairs under "Nested maps". **This changes the report format**: re-record existing snapshots once.
+- **"Review first"** lists key-like members (`Id`, `CustomerId`, `[Key]`) written by convention and unallowed parsing or narrowing conversions; such rows are marked ⚠.
+- **"Conversion methods"** lists every conversion method used and the members it was applied to; rows note `via Format()`.
+- **`DataFlowReport.ByMapper`**: the report of each mapper class on its own.
+- **Snapshot helpers** generated into the assembly: `DataFlowReport.AssertMatches("data-flow.md")` (one file) and `DataFlowReport.AssertMatchesDirectory("data-flow")` (one file per mapper class, so PRs touching different maps don't conflict). Paths are relative to the calling test file; a missing file is created; a mismatch fails with a line diff; `CONVENTIONMAPPER_UPDATE_SNAPSHOTS=1` re-records; line endings and trailing spaces are ignored.
+
+### Generated code in pull requests
+- **`<ConventionMapperEmitGeneratedCode>Generated</ConventionMapperEmitGeneratedCode>`** writes the generated mapping code into the project folder on every local build, and fails CI builds (`ContinuousIntegrationBuild`, `CI=true` or `TF_BUILD`) with CM0100 when the committed copy is out of date. Reviewers see code diffs instead of attribute diffs.
+- **`<ConventionMapperGeneratedDocs>true</ConventionMapperGeneratedDocs>`** adds XML docs to generated methods listing each member's source, shown on hover. A declaration's own doc comment is kept and the data flow goes into `<remarks>`.
+
+### Testing
+- **`WriteSets`** on every mapper class: the members each generated method writes, by `"Name(ParameterTypes)"` (and `"Name"` without overloads).
+- **New package `ConventionMapper.Testing`**: `MapperAssert.WritesExactly` fills a source object and checks exactly which members a map writes (against a list or a generated write set); `MapperAssert.UpdatesExactly` for update methods; `MapperAssert.AllMethodsCovered(typeof(Mappings), testAssembly)` fails when a mapping method has no test; `SampleData.Create<T>()`. No test-framework dependency.
+
+### IDE
+- CM0001 offers "Ignore 'X'", "Ignore all N unmapped members" and "Map only the mapped members ([MapExplicit])"; in explicit mode "Remove 'X' from [MapExplicit]".
+- Hidden CM0020 with a fix (also for a whole document, project or solution) that turns member-name strings in mapping attributes into `nameof(Type.Member)`, so renames are refactor-safe.
+- CM0023 (info) on `var x = s.ToY(); x.A = ...; x.B = ...;` after a generated mapping. The fix adds an overload `[MapInherit(nameof(ToY))] ToY(S s, A a, B b)` (or reuses one) and passes the values to it.
+- The source generator package now contains these fixes.
+
+### Packages
+- Every package contains `CHANGELOG.md`, and its release notes are the section for its version, so the NuGet UI shows what changed.
 
 ## 1.7.0 (2026-10-26)
 
