@@ -150,22 +150,22 @@ For code reviews and privacy audits, get every flow of data through the configur
 File.WriteAllText("data-flow.md", config.DataFlowReport());
 ```
 
-```
-## Sensitive members
+Example output:
+
+**Sensitive members**
 
 | Member | Copied to |
 | --- | --- |
 | `User.PasswordHash` | not copied anywhere |
 | `User.ApiToken` | `CacheEntry.ApiToken` (protected) |
 
-### `Order` → `OrderDto`
+**`Order` → `OrderDto`**
 
 | Destination | Source | Notes |
 | --- | --- | --- |
 | CustomerName | `Customer.Name` | flattened |
-| Total | `GetTotal()` |  |
+| Total | `GetTotal()` | |
 | InternalNotes | — | ignored |
-```
 
 The source generator writes the same report for generated mappers at build time, in `ConventionMapper.Generated.DataFlowReport.Markdown`; a unit test can save it, or compare it with a checked-in copy so any new flow of personal data shows up in the pull request.
 
