@@ -538,10 +538,10 @@ dotnet publish samples/ConventionMapper.Sample.Aot -c Release -r linux-x64 -o ou
 ## Building and publishing
 
 ```
-./build.sh 1.6.0      # or ./build.ps1 -Version 1.6.0
+./build.sh 1.2.3      # or ./build.ps1 -Version 1.2.3 (defaults to the version in the .csproj files)
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.1.6.0.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.1.6.0.nupkg` to `./artifacts`. Pushing a `v1.6.0` tag publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes `ConventionMapper.<version>.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.<version>.nupkg` to `./artifacts`. Publishing a GitHub release with a `v<version>` tag (for example `v1.2.3`) publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
 
 ## Contributing
 
