@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.8.0 (unreleased)
+## 1.8.0 (2026-10-26)
 
 Changes from migrating a large codebase to the source generator.
 
