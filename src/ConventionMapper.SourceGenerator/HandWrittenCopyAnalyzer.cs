@@ -22,7 +22,7 @@ namespace ConventionMapper.SourceGenerator
             "CM0029", "Hand-written copy can be a generated mapping",
             "{0} copies {1} members from '{2}' by hand; it can be a generated mapping method",
             "ConventionMapper.SourceGenerator", DiagnosticSeverity.Info, true,
-            helpLinkUri: "https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md#migrating-hand-written-copies");
+            helpLinkUri: "https://github.com/katragvb/Conventionmapper/blob/main/docs/diagnostics.md#cm0029");
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(HandWrittenCopy);
 

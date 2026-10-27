@@ -26,7 +26,7 @@ namespace ConventionMapper.Analyzers
         public const string SourceTypeProperty = "SourceType";
 
         private const string Category = "ConventionMapper";
-        private const string HelpLink = "https://github.com/katragvb/Conventionmapper/blob/main/docs/analyzers.md";
+        private const string HelpLink = "https://github.com/katragvb/Conventionmapper/blob/main/docs/diagnostics.md";
 
         internal static readonly DiagnosticDescriptor UnmappedMember = new DiagnosticDescriptor(
             UnmappedMemberId, "Unmapped destination member",
@@ -34,12 +34,12 @@ namespace ConventionMapper.Analyzers
             Category, DiagnosticSeverity.Warning, true,
             "Checks CreateMap<TSource, TDestination>() calls against the default conventions (same name, Get-methods, flattening). " +
             "Maps that are configured further in the same statement, and profiles that change naming conventions, are not checked.",
-            HelpLink);
+            HelpLink + "#cm1001");
 
         internal static readonly DiagnosticDescriptor PreferTypedMap = new DiagnosticDescriptor(
             PreferTypedMapId, "Use Map<TSource, TDestination> when the source type is known",
             "The source type is known: Map<{0}, {1}>(...) uses the static fast path without a runtime type lookup",
-            Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink);
+            Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink + "#cm1002");
 
         internal static readonly DiagnosticDescriptor SensitiveLeak = new DiagnosticDescriptor(
             SensitiveLeakId, "Sensitive member would be copied",
@@ -47,7 +47,7 @@ namespace ConventionMapper.Analyzers
             Category, DiagnosticSeverity.Error, true,
             "A mapping must not copy a [Sensitive] member (password hash, token, personal data) into a destination member that is not also marked [Sensitive]. " +
             "The same check fails the configuration at runtime.",
-            HelpLink);
+            HelpLink + "#cm1003");
 
         /// <summary>Configuration calls that change how members match; profiles using them are not checked by CM1001.</summary>
         private static readonly string[] ConventionChangingCalls =

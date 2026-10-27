@@ -21,7 +21,7 @@ namespace ConventionMapper.SourceGenerator
             "CM0023", "Members assigned after a generated mapping",
             "{0} assigned after '{1}' can be parameters of the mapping method",
             "ConventionMapper.SourceGenerator", DiagnosticSeverity.Info, true,
-            helpLinkUri: "https://github.com/katragvb/Conventionmapper/blob/main/docs/source-generator.md");
+            helpLinkUri: "https://github.com/katragvb/Conventionmapper/blob/main/docs/diagnostics.md#cm0023");
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(AssignmentsAfterMap);
 
