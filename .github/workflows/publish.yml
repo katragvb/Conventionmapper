@@ -71,8 +71,9 @@ jobs:
             --filter "FullyQualifiedName~SqlServerDatabaseAssertTests" --logger GitHubActions --logger "console;verbosity=normal" > sqlserver.log 2>&1 \
             || { cat sqlserver.log; report "dotnet test failed"; }
           cat sqlserver.log
-          grep -Eq "Skipped: +0," sqlserver.log || report "SQL Server tests were skipped instead of run"
-          grep -Eq "Passed: +[1-9]" sqlserver.log || report "No SQL Server test ran"
+          # The summary of console;verbosity=normal: "Passed: 6", and "Skipped: N" only when tests were skipped.
+          ! grep -Eq "^ *Skipped: *[1-9]" sqlserver.log || report "SQL Server tests were skipped instead of run"
+          grep -Eq "^ *Passed: *[1-9]" sqlserver.log || report "No SQL Server test ran"
 
   pack:
     needs: [ test, aot, sqlserver ]
