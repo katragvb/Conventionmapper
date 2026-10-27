@@ -65,11 +65,14 @@ jobs:
         env:
           CONVENTIONMAPPER_SQLSERVER: 'Server=localhost,1433;User Id=sa;Password=Cm_ci_Passw0rd!;TrustServerCertificate=True'
         run: |
-          set -o pipefail
+          # On failure the end of the output becomes an error annotation, readable without downloading the log.
+          report() { echo "::error title=SQL Server tests::$1%0A$(tail -n 60 sqlserver.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
           dotnet test tests/ConventionMapper.Tests/ConventionMapper.Tests.csproj -c Release -f net8.0 \
-            --filter "FullyQualifiedName~SqlServerDatabaseAssertTests" --logger GitHubActions --logger "console;verbosity=normal" | tee sqlserver.log
-          grep -Eq "Skipped: +0," sqlserver.log || { echo "SQL Server tests were skipped instead of run"; exit 1; }
-          grep -Eq "Passed: +[1-9]" sqlserver.log || { echo "No SQL Server test ran"; exit 1; }
+            --filter "FullyQualifiedName~SqlServerDatabaseAssertTests" --logger GitHubActions --logger "console;verbosity=normal" > sqlserver.log 2>&1 \
+            || { cat sqlserver.log; report "dotnet test failed"; }
+          cat sqlserver.log
+          grep -Eq "Skipped: +0," sqlserver.log || report "SQL Server tests were skipped instead of run"
+          grep -Eq "Passed: +[1-9]" sqlserver.log || report "No SQL Server test ran"
 
   pack:
     needs: [ test, aot, sqlserver ]
