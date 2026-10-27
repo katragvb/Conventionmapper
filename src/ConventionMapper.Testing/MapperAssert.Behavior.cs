@@ -46,6 +46,7 @@ namespace ConventionMapper.Testing
         public static IReadOnlyDictionary<string, string> LineageOf(Type mapperType, string method, params Type[] parameterTypes)
         {
             if (mapperType == null) throw new ArgumentNullException(nameof(mapperType));
+            CheckGeneratorVersion(mapperType);
             var accessor = mapperType.GetMethod("LineageOf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null,
                 new[] { typeof(string), typeof(Type[]) }, null);
             if (accessor == null)

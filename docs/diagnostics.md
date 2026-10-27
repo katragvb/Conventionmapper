@@ -1,7 +1,7 @@
 # Diagnostics
 
 Every ConventionMapper diagnostic, with the cause, an example and the fix. The IDE's error list links here: click the code.
-CM0001 to CM0033 come from `ConventionMapper.SourceGenerator`, CM0100 from its build targets, and CM1001 to CM1003 from the
+CM0001 to CM0036 come from `ConventionMapper.SourceGenerator`, CM0100 from its build targets, and CM1001 to CM1003 from the
 analyzers in the runtime `ConventionMapper` package. Change a severity in `.editorconfig`:
 
 ```ini
@@ -367,6 +367,66 @@ An undocumented destination member is copied from a member with a `<summary>`.
 
 **Fix:** the IDE fix *Copy documentation from 'Order.Status'* adds the summary and a `Copied from` remark, so API docs explain
 where each field comes from.
+
+## CM0034
+
+**Database default replaces the copied value** · Warning
+
+A create method writes a non-nullable value-type member (`bool`, `int`, an enum) of an EF Core entity whose column has a
+database default (`HasDefaultValueSql`, `HasDefaultValue`) other than the CLR default. EF Core treats the CLR default (`false`,
+`0`) as "not set" and leaves the column out of the insert, so a copied `false` becomes the database's `1`. Nothing fails: the
+row just has the wrong value.
+
+```csharp
+entity.Property(e => e.PrintText).HasDefaultValueSql("((1))");
+
+[MapExplicit(nameof(Form.PrintText))]
+public static partial Form Copy(QuoteForm source);   // CM0034: a copied false is saved as true
+```
+
+**Fix:** make the property nullable (`bool?`), so EF sends every value it holds, or configure `HasSentinel(...)` with a value
+the map never writes. Acknowledge it with `[MapReviewed("PrintText")]` when the database default is what you want for a
+`false`. `MapperAssert.SavesRoundTrip` (ConventionMapper.Testing.EntityFrameworkCore) shows the effect against a real database.
+
+## CM0035
+
+**[MapReviewed] acknowledges nothing** · Warning
+
+A `[MapReviewed]` entry on a method or the mapper class no longer silences anything: no method that uses it (the method
+itself, methods that inherit it through `[MapInherit]`, or every method for the class) writes that member as a key, a
+database-generated value, a navigation, a column with a database default, or a string that can be too long. Usually a fix
+in the library or a schema change made it unnecessary, and a stale acknowledgement would silently cover a future problem.
+
+```csharp
+[MapReviewed("StrFormAttachmentMethod")]   // CM0035: a plain default isn't a generated value since 1.9.1
+public static partial EndorsementForm ToEndorsementForm(QuoteForm source);
+```
+
+**Fix:** remove the entry. Give the ones you keep a `Reason` (`[MapReviewed("PolicyId", Reason = "...")]`); the data-flow report
+lists every acknowledgement with its reason.
+
+An entry acknowledges every kind of warning on its member unless `For` names the kinds:
+`[MapReviewed("StrFormName", For = ReviewKind.Key)]` acknowledges the key write but still reports a length problem (CM0027) on
+the same member. The kinds are `Key`, `GeneratedValue`, `Navigation`, `DatabaseDefault` and `Length`; an entry is stale when
+none of its kinds occurs.
+
+## CM0036
+
+**Database default replaces a copied null** · Info
+
+A create method copies a value that can be null into a nullable member of an EF Core entity whose column has a database
+default. EF Core treats null as "not set" and leaves the column out of the insert, so a copied null is stored as the default.
+That is often what you want (a default for missing data), so it is information rather than a warning.
+
+```csharp
+entity.Property(e => e.AttachmentMethod).HasDefaultValueSql("('U')");
+
+[MapExplicit(nameof(Form.AttachmentMethod))]
+public static partial Form Copy(QuoteForm source);   // CM0036: a null AttachmentMethod is stored as U
+```
+
+**Fix:** when the default is intended, acknowledge it with `[MapReviewed("AttachmentMethod", For = ReviewKind.DatabaseDefault)]`.
+To store null, configure a sentinel EF Core never sees (`HasSentinel`) or drop the column's default.
 
 ## CM0100
 

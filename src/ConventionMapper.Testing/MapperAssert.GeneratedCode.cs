@@ -81,6 +81,7 @@ namespace ConventionMapper.Testing
 
         private static IReadOnlyDictionary<string, string> EmbeddedCode(Type mapperType)
         {
+            CheckGeneratorVersion(mapperType);
             var field = mapperType.GetField("GeneratedCode", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             if (field?.GetValue(null) is IReadOnlyDictionary<string, string> code) return code;
             throw new MapperAssertException(NoEmbeddedCode(mapperType));

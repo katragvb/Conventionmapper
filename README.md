@@ -242,6 +242,17 @@ cfg.CreateMap<Color, ColorDto>().ConvertUsingEnumMapping(o => o
 
 Without a `Fallback`, any source value that has no match is reported by `AssertConfigurationIsValid()`, and mapping it at runtime throws instead of silently producing a wrong value. Enum maps also work inside `ProjectTo`.
 
+`ReverseMap()` creates the map back, with the same matching and every `MapValue` override inverted:
+
+```csharp
+cfg.CreateMap<Color, ColorDto>().ConvertUsingEnumMapping(o => o
+    .MapValue(Color.Purple, ColorDto.Violet)   // ColorDto.Violet -> Color.Purple on the way back
+    .Fallback(ColorDto.Unknown)
+    .ReverseMap(fallback: Color.Red));         // the reverse map's own fallback (optional)
+```
+
+A forward `Fallback` can't be inverted (many values map onto it), so the reverse map takes its own. Two overrides onto the same value (`Purple → Violet` and `Magenta → Violet`) can't be inverted either: `AssertConfigurationIsValid()` reports it, and mapping `Violet` back throws rather than guessing. Calling `ReverseMap()` on the map itself, before or after `ConvertUsingEnumMapping`, inverts the mapping too; a reverse map with its own `ConvertUsingEnumMapping` uses that instead.
+
 ### Immutable collections
 
 `ImmutableArray<T>`, `ImmutableList<T>`, `ImmutableHashSet<T>`, `ImmutableSortedSet<T>`, `ImmutableQueue<T>`, `ImmutableStack<T>`, `ImmutableDictionary<K,V>`, `ImmutableSortedDictionary<K,V>` and their `IImmutable*` interfaces are supported as destinations, with no extra dependency.
@@ -541,7 +552,7 @@ dotnet publish samples/ConventionMapper.Sample.Aot -c Release -r linux-x64 -o ou
 ./build.sh 1.2.3      # or ./build.ps1 -Version 1.2.3 (defaults to the version in the .csproj files)
 ```
 
-This restores, builds, runs the tests and writes `ConventionMapper.<version>.nupkg` (+ `.snupkg`) and `ConventionMapper.SourceGenerator.<version>.nupkg` to `./artifacts`. Publishing a GitHub release with a `v<version>` tag (for example `v1.2.3`) publishes both packages to nuget.org through trusted publishing (see `.github/workflows/publish.yml`).
+This restores, builds, runs the tests and writes the `ConventionMapper`, `ConventionMapper.SourceGenerator`, `ConventionMapper.Testing` and `ConventionMapper.Testing.EntityFrameworkCore` packages (+ `.snupkg`) to `./artifacts`. Every push to `main` publishes `<version>-preview.<run>` packages to nuget.org, and a `v<version>` tag (for example `v1.2.3`) publishes the release through trusted publishing (see `.github/workflows/publish.yml`). The release checklist is in [RELEASING.md](https://github.com/katragvb/Conventionmapper/blob/main/RELEASING.md).
 
 ## Contributing
 

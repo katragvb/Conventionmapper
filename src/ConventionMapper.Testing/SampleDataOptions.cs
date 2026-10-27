@@ -121,6 +121,20 @@ namespace ConventionMapper.Testing
         /// <summary>Also fill properties with private or init-only setters (entities that guard their state). Default false.</summary>
         public bool FillNonPublicSetters { get; set; }
 
+        /// <summary>An independent copy: changes to it don't affect these options (to add values for one run).</summary>
+        public SampleDataOptions Clone()
+        {
+            var copy = new SampleDataOptions { FillNonPublicSetters = FillNonPublicSetters, Seed = Seed };
+            foreach (var pair in _types) copy._types[pair.Key] = pair.Value;
+            copy._members.AddRange(_members);
+            foreach (var pair in _names) copy._names[pair.Key] = pair.Value;
+            foreach (var pair in _enums) copy._enums[pair.Key] = new List<object>(pair.Value);
+            foreach (var pair in _factories) copy._factories[pair.Key] = pair.Value;
+            copy._maxDepth = _maxDepth;
+            copy._collectionSize = _collectionSize;
+            return copy;
+        }
+
         /// <summary>A copy with another seed (used for repeated randomized runs).</summary>
         internal SampleDataOptions WithSeed(int seed)
         {

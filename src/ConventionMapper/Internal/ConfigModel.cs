@@ -84,6 +84,9 @@ namespace ConventionMapper.Internal
         public bool DisableCtorValidation;
         public bool IgnoreInaccessibleSetters;
         public TypeMapConfiguration? ReverseOf;
+
+        /// <summary>Set by ConvertUsingEnumMapping: configures the reverse map (ReverseMap) with the inverted enum mapping.</summary>
+        public Action<TypeMapConfiguration>? ConfigureReverse;
         public Func<object, object, bool>? EqualityComparison;
         public bool IgnoreNullSourceValues;
         public List<string> ValidationErrors = new List<string>();

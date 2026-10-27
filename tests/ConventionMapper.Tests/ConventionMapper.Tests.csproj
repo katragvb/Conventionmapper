@@ -26,6 +26,9 @@
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <!-- Proves generated projections translate to SQL -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.0" />
+    <!-- SqlServerDatabaseAssertTests: run when CONVENTIONMAPPER_SQLSERVER holds a connection string (the sqlserver CI job). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.0" />
+    <ProjectReference Include="..\..\src\ConventionMapper.Testing.EntityFrameworkCore\ConventionMapper.Testing.EntityFrameworkCore.csproj" />
     <!-- IDE code fixes and refactorings are tested in a Roslyn workspace -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
     <ProjectReference Include="..\..\src\ConventionMapper.CodeFixes\ConventionMapper.CodeFixes.csproj" />
