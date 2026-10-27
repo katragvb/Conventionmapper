@@ -445,6 +445,8 @@ The package includes quick fixes (Ctrl+. in Visual Studio and Rider, Cmd+. in VS
 * **CM0026** (info): a personal-looking member that isn't `[Sensitive]`: *Mark [Sensitive]*.
 * **CM0029** (info): a hand-written copy or conversion operator: *Convert to generated mapping*, and for operators *Replace the operator with a generated mapping (update call sites)*. See [Migrating hand-written copies](#migrating-hand-written-copies).
 * **CM0033** (hidden): an undocumented destination member copied from a documented one: *Copy documentation from 'X'*.
+* **CM0034** (warning): a create method writes a non-nullable `bool` or number into an entity column with a database default; EF Core drops a copied `false` or `0`, so the default is stored.
+* **CM0035** (warning): a `[MapReviewed]` entry acknowledges nothing; remove it.
 
 ## Configuring members
 
@@ -725,6 +727,8 @@ Each code links to [its own section](https://github.com/katragvb/Conventionmappe
 | CM0031 | Warning | A map reads or writes an `[Obsolete]` member. |
 | CM0032 | Warning | `[Sensitive]` data passed to a logger, an exception message or `ToString()`. |
 | CM0033 | Hidden | An undocumented destination member can take its source member's documentation (with a fix). |
+| CM0034 | Warning | A copied `false` or `0` is replaced by the column's database default on insert (EF Core sentinel values). |
+| CM0035 | Warning | A `[MapReviewed]` entry that acknowledges nothing. |
 | CM0100 | Error | The generated code committed with `ConventionMapperEmitGeneratedCode` is out of date (CI builds). |
 
 Severities can be changed in `.editorconfig`, for example `dotnet_diagnostic.CM0003.severity = warning`.

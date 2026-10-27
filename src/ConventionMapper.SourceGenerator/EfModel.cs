@@ -27,6 +27,12 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>Columns with HasDefaultValueSql: the database fills them only when an insert leaves them out.</summary>
         private readonly Dictionary<ITypeSymbol, Dictionary<string, bool>> _defaultSql = new Dictionary<ITypeSymbol, Dictionary<string, bool>>(SymbolEqualityComparer.Default);
 
+        /// <summary>Columns with HasDefaultValueSql or HasDefaultValue: the default as text ("1", "U"), or null when it isn't a literal.</summary>
+        private readonly Dictionary<ITypeSymbol, Dictionary<string, string?>> _insertDefaults = new Dictionary<ITypeSymbol, Dictionary<string, string?>>(SymbolEqualityComparer.Default);
+
+        /// <summary>Members with HasSentinel: EF Core compares with that value instead of the CLR default.</summary>
+        private readonly Dictionary<ITypeSymbol, HashSet<string>> _sentinels = new Dictionary<ITypeSymbol, HashSet<string>>(SymbolEqualityComparer.Default);
+
         private EfModel(Compilation compilation, CancellationToken ct)
         {
             _compilation = compilation;
@@ -68,6 +74,20 @@ namespace ConventionMapper.SourceGenerator
         /// <summary>The column has a database default (HasDefaultValueSql), such as newid() or NEXT VALUE FOR a sequence on a key.</summary>
         public bool HasDefaultSql(ITypeSymbol type, string member) =>
             _defaultSql.TryGetValue(type.OriginalDefinition, out var values) && values.ContainsKey(member);
+
+        /// <summary>
+        /// The column's database default (HasDefaultValueSql or HasDefaultValue) as text without SQL parentheses and quotes
+        /// ("((1))" -> "1"); <paramref name="text"/> is null when the default isn't a literal (getdate(), newid()).
+        /// </summary>
+        public bool TryGetInsertDefault(ITypeSymbol type, string member, out string? text)
+        {
+            text = null;
+            return _insertDefaults.TryGetValue(type.OriginalDefinition, out var values) && values.TryGetValue(member, out text);
+        }
+
+        /// <summary>HasSentinel: EF Core leaves the column out of an insert only when it holds this configured value.</summary>
+        public bool HasSentinel(ITypeSymbol type, string member) =>
+            _sentinels.TryGetValue(type.OriginalDefinition, out var members) && members.Contains(member);
 
         // ------------------------------------------------------------------ entity types
 
@@ -235,6 +255,13 @@ namespace ConventionMapper.SourceGenerator
                                 break;
                             case "HasDefaultValueSql":
                                 Map(_defaultSql, entity)[members[0]] = true;
+                                Map(_insertDefaults, entity)[members[0]] = DefaultText(call, model, sql: true);
+                                break;
+                            case "HasDefaultValue":
+                                Map(_insertDefaults, entity)[members[0]] = DefaultText(call, model, sql: false);
+                                break;
+                            case "HasSentinel":
+                                Set(_sentinels, entity).Add(members[0]);
                                 break;
                             case "ValueGeneratedNever":
                                 Map(_generated, entity)[members[0]] = false;
@@ -257,6 +284,24 @@ namespace ConventionMapper.SourceGenerator
                         if (initializer.Expression is MemberAccessExpressionSyntax part) yield return part.Name.Identifier.ValueText;
                     break;
             }
+        }
+
+        /// <summary>
+        /// A default's value as text: HasDefaultValue(1) -> "1", HasDefaultValue(false) -> "false", HasDefaultValueSql("((1))") -> "1",
+        /// HasDefaultValueSql("('U')") -> "U"; null for expressions such as getdate().
+        /// </summary>
+        private string? DefaultText(InvocationExpressionSyntax call, SemanticModel model, bool sql)
+        {
+            if (call.ArgumentList.Arguments.Count != 1) return null;
+            var value = model.GetConstantValue(call.ArgumentList.Arguments[0].Expression, _ct);
+            if (!value.HasValue) return null;
+            if (!sql) return value.Value is bool flag ? (flag ? "true" : "false") : Convert.ToString(value.Value, System.Globalization.CultureInfo.InvariantCulture);
+            if (!(value.Value is string text)) return null;
+            text = text.Trim();
+            while (text.Length >= 2 && text[0] == '(' && text[text.Length - 1] == ')') text = text.Substring(1, text.Length - 2).Trim();
+            if (text.Length >= 2 && text[0] == '\'' && text[text.Length - 1] == '\'') return text.Substring(1, text.Length - 2);
+            if (text.Length >= 3 && text[0] == 'N' && text[1] == '\'' && text[text.Length - 1] == '\'') return text.Substring(2, text.Length - 3);
+            return text.Length > 0 && (char.IsDigit(text[0]) || text[0] == '-') && text.Skip(1).All(c => char.IsDigit(c) || c == '.') ? text : null;
         }
 
         private static HashSet<string> Set(Dictionary<ITypeSymbol, HashSet<string>> map, ITypeSymbol type)

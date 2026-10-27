@@ -58,12 +58,20 @@ jobs:
 
       - name: Compute version
         id: version
+        # Tags publish the release. Pushes to main publish a preview of the next release (consumers can try a change before
+        # it is tagged), unless that version is already released: 1.9.1-preview.N would sort below the released 1.9.1.
+        # Other branches and pull requests only build -ci.N packages as artifacts.
         run: |
+          base=$(grep -oPm1 '(?<=<Version>)[^<]+' src/ConventionMapper/ConventionMapper.csproj)
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/heads/main && -z "$(git tag -l "v${base}")" ]]; then
+            echo "value=${base}-preview.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           else
-            base=$(grep -oPm1 '(?<=<Version>)[^<]+' src/ConventionMapper/ConventionMapper.csproj)
             echo "value=${base}-ci.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
       - run: ./build.sh ${{ steps.version.outputs.value }}
@@ -74,12 +82,39 @@ jobs:
           path: artifacts/*
 
       - name: NuGet login (trusted publishing)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.publish == 'true'
         id: login
         uses: NuGet/login@v1
         with:
           user: katragvb
 
       - name: Publish to nuget.org
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.publish == 'true'
         run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  forward-merge:
+    # After a release, opens a pull request merging main into every feature branch that doesn't contain it yet, so fixes
+    # released from main (1.9.1) reach the next version's branch (1.10.0) instead of being merged by hand or forgotten.
+    # Needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
+    needs: pack
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open pull requests from main into feature branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for branch in $(git branch -r --format='%(refname:short)' | grep '^origin/feature/' | sed 's#^origin/##'); do
+            if git merge-base --is-ancestor origin/main "origin/${branch}"; then continue; fi
+            if [ -n "$(gh pr list --base "${branch}" --head main --state open --json number --jq '.[].number')" ]; then continue; fi
+            gh pr create --base "${branch}" --head main \
+              --title "Merge main (${GITHUB_REF_NAME}) into ${branch}" \
+              --body "Brings the changes released in ${GITHUB_REF_NAME} into ${branch}. Opened automatically after the release; resolve conflicts (usually versions and CHANGELOG.md) and merge."
+          done

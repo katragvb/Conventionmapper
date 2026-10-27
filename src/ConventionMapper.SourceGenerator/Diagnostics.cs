@@ -157,6 +157,21 @@ namespace ConventionMapper.SourceGenerator
             "'{0}' has no documentation; it is copied from '{1}', which has",
             Category, DiagnosticSeverity.Hidden, true, helpLinkUri: HelpLink + "#cm0033");
 
+        public static readonly DiagnosticDescriptor DatabaseDefaultReplacesValue = new DiagnosticDescriptor(
+            "CM0034", "Database default replaces the copied value",
+            "'{0}' writes '{1}' of the entity '{2}', a {3} with the database default {4}. EF Core leaves the column out of the insert when the value is {5}, so the row gets {4} instead of the copied {5}. Make the property nullable, configure HasSentinel, or acknowledge it with [MapReviewed(\"{1}\", For = ReviewKind.DatabaseDefault)].",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink + "#cm0034");
+
+        public static readonly DiagnosticDescriptor StaleReview = new DiagnosticDescriptor(
+            "CM0035", "[MapReviewed] acknowledges nothing",
+            "[MapReviewed({0})] on '{1}' acknowledges nothing: no method that uses it writes '{2}' as a key, a database-generated value, a navigation, a column with a database default or a string that can be too long (of the kinds it names). Remove it.",
+            Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink + "#cm0035");
+
+        public static readonly DiagnosticDescriptor DatabaseDefaultReplacesNull = new DiagnosticDescriptor(
+            "CM0036", "Database default replaces a copied null",
+            "'{0}' writes '{1}' of the entity '{2}' from a source that can be null, and the column has the database default {3}: EF Core leaves null out of the insert, so a copied null is stored as {3}. If that is intended, acknowledge it with [MapReviewed(\"{1}\", For = ReviewKind.DatabaseDefault)]; to store null, configure a sentinel (HasSentinel) or drop the default.",
+            Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink + "#cm0036");
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

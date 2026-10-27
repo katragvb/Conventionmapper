@@ -251,7 +251,10 @@ public class Db : DbContext
             Assert.Contains(messages, m => m.Contains("writes the database-generated column 'Total' of the entity 'Form'"));     // computed
             Assert.DoesNotContain(messages, m => m.Contains("StrAttachmentMethod") || m.Contains("YsnTextQb") || m.Contains("'Version'") || m.Contains("StrNote"));
             Assert.Contains("| Total | `Total` | ⚠ generated column |", result.Report);
-            Assert.Contains("| YsnTextQb | `YsnTextQb` |  |", result.Report);
+            // Not a generated value, but a copied false is dropped on insert (CM0034); Version's default is 0 already.
+            Assert.Contains("| YsnTextQb | `YsnTextQb` | ⚠ database default |", result.Report);
+            Assert.Contains("| Version | `Version` |  |", result.Report);
+            Assert.Single(result.WithId("CM0034"));
         }
 
         [Fact]

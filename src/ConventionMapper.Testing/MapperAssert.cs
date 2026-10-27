@@ -184,6 +184,7 @@ namespace ConventionMapper.Testing
         /// </summary>
         public static IReadOnlyList<string> WriteSetOf(Type mapperType, string method, params Type[] parameterTypes)
         {
+            CheckGeneratorVersion(mapperType);
             var accessor = mapperType.GetMethod("WriteSetOf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null,
                 new[] { typeof(string), typeof(Type[]) }, null);
             if (accessor == null)
@@ -200,6 +201,7 @@ namespace ConventionMapper.Testing
 
         private static IReadOnlyDictionary<string, IReadOnlyList<string>> WriteSets(Type mapperType)
         {
+            CheckGeneratorVersion(mapperType);
             var field = mapperType.GetField("WriteSets", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             if (field?.GetValue(null) is IReadOnlyDictionary<string, IReadOnlyList<string>> sets) return sets;
             throw new MapperAssertException("'" + mapperType.FullName + "' has no generated WriteSets. Is it a [GeneratedMapper] class built with ConventionMapper.SourceGenerator 1.8 or later?");

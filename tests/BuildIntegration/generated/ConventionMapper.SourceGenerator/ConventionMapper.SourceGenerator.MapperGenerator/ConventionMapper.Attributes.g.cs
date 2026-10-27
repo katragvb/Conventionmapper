@@ -135,9 +135,29 @@ namespace ConventionMapper
         public global::System.Type[] ParameterTypes { get; }
     }
 
+    /// <summary>What a [MapReviewed] entry acknowledges (<c>For = ReviewKind.Key | ReviewKind.Length</c>); All by default.</summary>
+    [global::System.Flags]
+    internal enum ReviewKind
+    {
+        /// <summary>A key or foreign key written by the map ("Review first").</summary>
+        Key = 1,
+        /// <summary>A database-generated value: identity, sequence, computed column (CM0028).</summary>
+        GeneratedValue = 2,
+        /// <summary>A navigation of an entity (CM0028).</summary>
+        Navigation = 4,
+        /// <summary>A column whose database default replaces a copied false, 0 or null (CM0034, CM0036).</summary>
+        DatabaseDefault = 8,
+        /// <summary>A string that can be longer than the destination allows (CM0027).</summary>
+        Length = 16,
+        /// <summary>Every kind.</summary>
+        All = Key | GeneratedValue | Navigation | DatabaseDefault | Length,
+    }
+
     /// <summary>
-    /// Marks key members (Id, foreign keys) whose writes in this method, or in every method of the class, have been reviewed,
-    /// so they leave the "Review first" list of the data-flow report: <c>[MapReviewed(nameof(Policy.PolicyId))]</c>.
+    /// Marks members whose writes in this method, or in every method of the class, have been reviewed (keys, database-generated
+    /// values, database defaults, strings that can be too long), so they leave the "Review first" list of the data-flow report
+    /// and their warnings: <c>[MapReviewed(nameof(Policy.PolicyId), For = ReviewKind.Key, Reason = "the caller owns the policy")]</c>.
+    /// An entry that acknowledges nothing is CM0035.
     /// </summary>
     [global::System.AttributeUsage(global::System.AttributeTargets.Class | global::System.AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
     [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
@@ -149,6 +169,15 @@ namespace ConventionMapper
         }
 
         public string[] Members { get; }
+
+        /// <summary>Why the writes are fine; listed in the data-flow report.</summary>
+        public string? Reason { get; set; }
+
+        /// <summary>
+        /// The warnings this entry acknowledges. All by default; name the kind (<c>ReviewKind.Key</c>) so a different problem
+        /// on the same member, such as a length, is still reported.
+        /// </summary>
+        public ReviewKind For { get; set; } = ReviewKind.All;
     }
     /// <summary>A constant for a destination member (or constructor parameter): <c>[MapConstant("Status", FormStatus.New)]</c>.</summary>
     [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
