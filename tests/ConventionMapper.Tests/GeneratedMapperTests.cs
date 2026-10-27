@@ -151,7 +151,7 @@ namespace ConventionMapper.Tests.Generated
             Assert.Equal(2, dto.Lines[0].Quantity);
             Assert.Equal(GenStatusDto.Shipped, dto.Status);
             Assert.Equal(3, dto.Priority);
-            Assert.Equal(order.Created.ToString(), dto.Created);
+            Assert.Equal(order.Created.ToString(System.Globalization.CultureInfo.InvariantCulture), dto.Created); // generated text is culture-invariant
             Assert.Equal(1L, dto.Tags["vip"]);
             Assert.Equal(new[] { "x" }, dto.Labels);
             Assert.Equal(13m, dto.Total);
