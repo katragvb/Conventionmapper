@@ -196,6 +196,7 @@ namespace ConventionMapper.Configuration
             if (_profile == null) throw new NotSupportedException("ReverseMap cannot be called from ForAllMaps.");
             var reverse = new TypeMapConfiguration(typeof(TDestination), typeof(TSource), MemberList.None) { ReverseOf = _config };
             _profile.TypeMapConfigs.Add(reverse);
+            _config.ConfigureReverse?.Invoke(reverse);
             return new MappingExpression<TDestination, TSource>(reverse, _profile);
         }
 
@@ -224,6 +225,10 @@ namespace ConventionMapper.Configuration
         }
 
         internal TypeMapConfiguration Config => _config;
+
+        /// <summary>The reverse map created by ReverseMap() for this map, if any.</summary>
+        internal TypeMapConfiguration? FindReverse() =>
+            _profile?.TypeMapConfigs.FirstOrDefault(c => ReferenceEquals(c.ReverseOf, _config));
 
         public IMappingExpression<TSource, TDestination> EqualityComparison(Expression<Func<TSource, TDestination, bool>> comparison)
         {
@@ -286,6 +291,7 @@ namespace ConventionMapper.Configuration
         {
             if (_profile == null) throw new NotSupportedException("ReverseMap cannot be called from ForAllMaps.");
             var reverse = new TypeMapConfiguration(_config.DestinationType, _config.SourceType, MemberList.None) { ReverseOf = _config };
+            _config.ConfigureReverse?.Invoke(reverse);
             _profile.TypeMapConfigs.Add(reverse);
             return new MappingExpression(reverse, _profile);
         }

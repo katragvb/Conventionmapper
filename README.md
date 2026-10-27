@@ -242,6 +242,17 @@ cfg.CreateMap<Color, ColorDto>().ConvertUsingEnumMapping(o => o
 
 Without a `Fallback`, any source value that has no match is reported by `AssertConfigurationIsValid()`, and mapping it at runtime throws instead of silently producing a wrong value. Enum maps also work inside `ProjectTo`.
 
+`ReverseMap()` creates the map back, with the same matching and every `MapValue` override inverted:
+
+```csharp
+cfg.CreateMap<Color, ColorDto>().ConvertUsingEnumMapping(o => o
+    .MapValue(Color.Purple, ColorDto.Violet)   // ColorDto.Violet -> Color.Purple on the way back
+    .Fallback(ColorDto.Unknown)
+    .ReverseMap(fallback: Color.Red));         // the reverse map's own fallback (optional)
+```
+
+A forward `Fallback` can't be inverted (many values map onto it), so the reverse map takes its own. Two overrides onto the same value (`Purple → Violet` and `Magenta → Violet`) can't be inverted either: `AssertConfigurationIsValid()` reports it, and mapping `Violet` back throws rather than guessing. Calling `ReverseMap()` on the map itself, before or after `ConvertUsingEnumMapping`, inverts the mapping too; a reverse map with its own `ConvertUsingEnumMapping` uses that instead.
+
 ### Immutable collections
 
 `ImmutableArray<T>`, `ImmutableList<T>`, `ImmutableHashSet<T>`, `ImmutableSortedSet<T>`, `ImmutableQueue<T>`, `ImmutableStack<T>`, `ImmutableDictionary<K,V>`, `ImmutableSortedDictionary<K,V>` and their `IImmutable*` interfaces are supported as destinations, with no extra dependency.

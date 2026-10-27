@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.9.0 (unreleased)
+## 1.10.0 (unreleased)
+
+### Runtime package
+- **`ReverseMap()` for enum maps:** `ConvertUsingEnumMapping(o => o.MapValue(Color.Purple, ColorDto.Violet).ReverseMap())` also creates `ColorDto` → `Color` with the same matching (by name, case-insensitive or by value) and every override inverted. `ReverseMap(fallback: Color.Red)` sets the reverse map's fallback (a forward `Fallback` can't be inverted). Two overrides onto the same value can't be inverted: validation reports it and mapping that value back throws. `ReverseMap()` on the map itself, before or after `ConvertUsingEnumMapping`, inverts the mapping too, matching AutoMapper.Extensions.EnumMapping.
+
+## 1.9.0 (2026-10-27)
 
 Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, new kinds of methods, data protection, integrations, migration tooling and behavior tests.
 
