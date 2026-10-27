@@ -685,7 +685,7 @@ public static partial class OrderMapper { ... }
 
 ## Diagnostics
 
-Each code links to [its own section](diagnostics.md) with the cause, an example and the fix.
+Each code links to [its own section](https://github.com/katragvb/Conventionmapper/blob/main/docs/diagnostics.md) with the cause, an example and the fix.
 
 | Id | Severity | Meaning |
 | --- | --- | --- |
