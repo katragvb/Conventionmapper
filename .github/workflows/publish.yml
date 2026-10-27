@@ -128,7 +128,7 @@ jobs:
         run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
   forward-merge:
-    # After a release, opens a pull request merging main into every feature branch that doesn't contain it yet, so fixes
+    # After a release, opens a pull request merging main into every later-version feature branch that doesn't contain it yet, so fixes
     # released from main (1.9.1) reach the next version's branch (1.10.0) instead of being merged by hand or forgotten.
     # Needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
     needs: pack
@@ -146,7 +146,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          released="${GITHUB_REF_NAME#v}"
           for branch in $(git branch -r --format='%(refname:short)' | grep '^origin/feature/' | sed 's#^origin/##'); do
+            # Only branches for a later version than the one just released: older ones were squash-merged already and
+            # never show up as merged in git history.
+            version=$(echo "${branch#feature/}" | grep -oE '^[0-9]+(\.[0-9]+){1,2}') || continue
+            newest=$(printf '%s\n%s\n' "${version}" "${released}" | sort -V | tail -n1)
+            if [ "${version}" = "${released}" ] || [ "${newest}" != "${version}" ]; then continue; fi
             if git merge-base --is-ancestor origin/main "origin/${branch}"; then continue; fi
             if [ -n "$(gh pr list --base "${branch}" --head main --state open --json number --jq '.[].number')" ]; then continue; fi
             gh pr create --base "${branch}" --head main \
