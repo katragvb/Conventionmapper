@@ -15,8 +15,9 @@ namespace ConventionMapper.Testing
         /// Checks where values come from, not only which members are written: maps a filled source (every value is distinct
         /// and strings carry the member name) and checks that each destination member holds the value of the expected source
         /// member path. A swapped pair (<c>SubmitUserId</c> filled from <c>CompleteUser.Id</c>) fails and names the member the
-        /// value really came from. Pass the generated lineage to turn the data-flow report into a test:
-        /// <c>MapperAssert.WritesFrom((Order o) =&gt; o.ToDto(), MapperAssert.LineageOf(typeof(Mappings), nameof(Mappings.ToDto)))</c>.
+        /// value really came from. The expectations must be yours: passing the generated lineage
+        /// (<c>MapperAssert.LineageOf(...)</c>) only proves the code matches the mapping configuration, because a configuration
+        /// mistake (a [MapMember] that swaps two members) is recorded in the lineage too.
         /// Nested objects mapped by another method are left to that method's own check.
         /// </summary>
         public static void WritesFrom<TSource, TDestination>(Func<TSource, TDestination> map, IReadOnlyDictionary<string, string> expected, SampleDataOptions? options = null)
@@ -181,7 +182,10 @@ namespace ConventionMapper.Testing
         /// A zero-effort baseline: runs every generated create and update method of <paramref name="mapperType"/> with
         /// sample data (extra parameters filled too) and checks it against the generator's own WriteSets and Lineage: it must
         /// not throw, must write no member outside its write set, must write the members it copies from a filled source, and
-        /// must copy each from the right source member. A new map gets this coverage before anyone writes a dedicated test.
+        /// each value must come from the member the generator recorded. A new map gets this coverage before anyone writes a
+        /// dedicated test. It compares the code with the generator's own record of the configuration, so it catches runtime
+        /// failures (parsing, [MapRequired], conversion methods) and generator bugs, not configuration mistakes: a
+        /// [MapMember] that swaps two members passes. Check the configuration with <c>WritesFrom</c> or <c>WritesExactly</c> and expectations you write.
         /// Projections and collection merges are skipped (they need a query provider or a collection to merge into).
         /// </summary>
         public static void AllMappersMatchWriteSets(Type mapperType, SampleDataOptions? options = null)

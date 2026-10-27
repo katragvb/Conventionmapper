@@ -39,7 +39,7 @@
     <EnablePackageValidation>true</EnablePackageValidation>
     <!-- Fails the pack when a release breaks the public API of the latest published version.
          Skipped for CI builds (0.0.0-ci.N), whose version is always lower than the baseline. -->
-    <PackageValidationBaselineVersion Condition="!$([System.String]::Copy('$(Version)').StartsWith('0.'))">1.9.0</PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion Condition="!$([System.String]::Copy('$(Version)').StartsWith('0.'))">1.9.1</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <!-- Build-time analyzer + code fixes for the runtime API, shipped in this package under analyzers/dotnet/cs. -->

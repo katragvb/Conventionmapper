@@ -43,11 +43,11 @@ MapperAssert.WritesFrom((Claim c) => c.ToDto(), ("SubmitUserId", "SubmitUser.Id"
 // CompleteUserId: expected the value of CompleteUser.Id (12), but it holds 9, the value of SubmitUser.Id
 ```
 
-With the source generator, use the generated lineage, so the data-flow report becomes an executable test:
-
-```csharp
-MapperAssert.WritesFrom((Claim c) => c.ToDto(), MapperAssert.LineageOf(typeof(Mappings), nameof(Mappings.ToDto), typeof(Claim)));
-```
+The expected pairs must come from you (or from a spec), not from the code under test. With the source generator you can
+pass the generated lineage instead, `MapperAssert.LineageOf(typeof(Mappings), nameof(Mappings.ToDto), typeof(Claim))`,
+but that records the mapping configuration, so a configuration mistake such as a `[MapMember]` that swaps two members is
+in the lineage too and passes. It only proves the generated code does what the configuration says. Pair it with the
+snapshot-tested data-flow report, where a reviewer sees the swap, or state the pairs that matter explicitly.
 
 Nested objects mapped by another method are left to that method's own check. Built-in conversions (numbers, `ToString`,
 enum names) are followed; a conversion it can't follow is only reported when the value clearly came from elsewhere.
@@ -62,8 +62,16 @@ public void Every_map_matches_its_write_set() =>
 
 Runs every generated create and update method with sample data (extra parameters filled too) and compares it with the
 generator's `WriteSets` and `Lineage`: it must not throw, must not write members outside its write set, must write the
-members it copies from a filled source, and must copy each from the right member. A new map gets this coverage before
-anyone writes a dedicated test. When sample values aren't valid input (a string that is parsed, say), pass options:
+members it copies from a filled source, and each value must come from the member the generator recorded. A new map gets
+this coverage before anyone writes a dedicated test.
+
+**What it can't catch:** it compares the generated code with the generator's own record of the configuration, so a
+mistake in the configuration itself passes. If `[MapMember("CompleteUser.Id", "SubmitUserId")]` swaps two members, the
+code and the record agree, and the check passes. It finds problems the configuration doesn't show: exceptions on real
+values (a parse, a `[MapRequired]` member, a conversion method), and generator bugs. To check the configuration is
+*right*, state the expected sources yourself with `WritesFrom` (above) or the expected members with `WritesExactly`.
+
+When sample values aren't valid input (a string that is parsed, say), pass options:
 `AllMappersMatchWriteSets(typeof(Mappings), new SampleDataOptions().For<Row, string>(r => r.Code, n => n.ToString()))`.
 Projections and collection merges are skipped.
 
