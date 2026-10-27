@@ -294,10 +294,18 @@ entity the insert would fail or cut the value.
 
 ## CM0028
 
-**Mapping writes a database-generated key or a navigation** · Warning
+**Mapping writes a database-generated value or a navigation** · Warning
 
-A map writes an identity (or other database-generated) key, or a navigation property, into an EF Core entity. Copying either
-between rows causes duplicate keys or attaches the source's related rows to the new row.
+A map writes a value the database generates, or a navigation property, into an EF Core entity:
+
+- a **generated key**: an identity, or a key with a database default such as `newid()` or `NEXT VALUE FOR` a sequence.
+  Copying it between rows causes duplicate keys.
+- a **generated column**: computed (`HasComputedColumnSql`) or `ValueGeneratedOnAdd` / `OnUpdate`. The write fails or is
+  ignored.
+- a **navigation**: EF Core attaches the source's related rows to the new row.
+
+A column that only has a database default (`HasDefaultValueSql("('U')")`) is not reported: the database uses the default
+only when an insert leaves the column out, so copying a value into it is normal.
 
 ```csharp
 [MapExplicit(nameof(EndorsementLocation.Id), nameof(EndorsementLocation.City))]   // CM0028: Id is generated

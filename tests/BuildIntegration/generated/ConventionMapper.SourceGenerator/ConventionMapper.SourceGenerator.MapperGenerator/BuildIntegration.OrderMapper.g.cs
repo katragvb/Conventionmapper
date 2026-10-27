@@ -16,7 +16,7 @@ namespace BuildIntegration
         /// </list>
         /// Writes: Id, Title.
         /// </remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("ConventionMapper.SourceGenerator", "1.9.0")][global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        [global::System.CodeDom.Compiler.GeneratedCode("ConventionMapper.SourceGenerator", "1.9.1")][global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
         public static partial global::BuildIntegration.OrderDto ToDto(this global::BuildIntegration.Order order)
         {
             if (order is null) return default!;

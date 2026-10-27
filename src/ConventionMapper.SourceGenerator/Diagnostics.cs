@@ -138,8 +138,8 @@ namespace ConventionMapper.SourceGenerator
             Category, DiagnosticSeverity.Info, true, helpLinkUri: HelpLink + "#cm0027");
 
         public static readonly DiagnosticDescriptor DatabaseGeneratedWrite = new DiagnosticDescriptor(
-            "CM0028", "Mapping writes a database-generated key or a navigation",
-            "'{0}' writes {1} '{2}' of the entity '{3}'. Copying it between rows is a common source of duplicate keys and accidental graph changes: leave it out with [MapIgnore(\"{2}\")], or acknowledge it with [MapReviewed(\"{2}\")].",
+            "CM0028", "Mapping writes a database-generated value or a navigation",
+            "'{0}' writes {1} '{2}' of the entity '{3}'. The database sets it (or EF Core attaches it), so copying it between rows causes duplicate keys, failed or ignored writes to computed columns, or accidental graph changes: leave it out with [MapIgnore(\"{2}\")], or acknowledge it with [MapReviewed(\"{2}\")].",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink + "#cm0028");
 
         public static readonly DiagnosticDescriptor CultureSensitive = new DiagnosticDescriptor(

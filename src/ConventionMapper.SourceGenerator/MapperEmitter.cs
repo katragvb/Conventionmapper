@@ -4559,6 +4559,9 @@ namespace ConventionMapper.SourceGenerator
             var configured = Ef.IsGenerated(owner, memberName);
             if (configured.HasValue) return configured.Value;
             if (!IsEntity(owner)) return false;
+            // A database default on a key (newid(), NEXT VALUE FOR a sequence) generates the key; on any other column it is
+            // only used when the insert leaves the column out, so writing it is normal.
+            if (Ef.HasDefaultSql(owner, memberName)) return IsKey(owner, memberName);
 
             var keys = Ef.Keys(owner);
             var isSingleKey = keys != null
@@ -4600,15 +4603,26 @@ namespace ConventionMapper.SourceGenerator
         {
             if (_current == null || TryGetProjection(_current, out _, out _, out _) || !IsEntity(destination)) return;
             string? what = null;
-            if (IsDatabaseGenerated(destination, memberName)) what = "the database-generated key";
-            else if (IsNavigation(destination, memberName)) what = "the navigation";
+            string? note = null;
+            if (IsDatabaseGenerated(destination, memberName))
+            {
+                // Keys are identities and sequences; other generated columns are computed or ValueGeneratedOnAdd/Update.
+                var key = IsKey(destination, memberName);
+                what = key ? "the database-generated key" : "the database-generated column";
+                note = key ? "generated key" : "generated column";
+            }
+            else if (IsNavigation(destination, memberName))
+            {
+                what = "the navigation";
+                note = "navigation";
+            }
             if (what == null) return;
             if (reviewed)
             {
-                notes.Add(what == "the navigation" ? "navigation (reviewed)" : "generated key (reviewed)");
+                notes.Add(note + " (reviewed)");
                 return;
             }
-            notes.Add(what == "the navigation" ? "⚠ navigation" : "⚠ generated key");
+            notes.Add("⚠ " + note);
             _riskyFlows.Add("`" + Short(destination) + "." + memberName + "` is " + what.Substring(4) + " of an entity");
             if (_reportedDatabaseWrites.Add(_current.Name + "|" + T(destination) + "|" + memberName))
                 Report(Diagnostics.DatabaseGeneratedWrite, _current.Name, what, memberName, Short(destination.WithNullableAnnotation(NullableAnnotation.NotAnnotated)));
