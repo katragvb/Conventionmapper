@@ -171,7 +171,8 @@ public class Db : DbContext
             Assert.Contains("`Location.Code` (key)", result.Report);        // HasKey
             Assert.Contains("`Location.OwnerRef` (key)", result.Report);    // HasForeignKey
             var generated = Assert.Single(result.WithId("CM0028"));          // ValueGeneratedOnAdd
-            Assert.Contains("the database-generated key 'Number'", generated.GetMessage());
+            // Number is ValueGeneratedOnAdd but not a key, so it is a generated column, not a key.
+            Assert.Contains("the database-generated column 'Number'", generated.GetMessage());
             var length = Assert.Single(result.WithId("CM0027"));             // HasMaxLength(20), entity: warning
             Assert.Equal(DiagnosticSeverity.Warning, length.Severity);
             Assert.Contains("can be longer than 20 characters, the maximum of 'Location.City'", length.GetMessage());
@@ -190,7 +191,67 @@ public class Db : DbContext
             Assert.Empty(result.WithId("CM0027"));
             Assert.Empty(result.WithId("CM0028"));
             Assert.Contains("City = __Truncate(dto.City, 20)", result.Source);
-            Assert.Contains("generated key (reviewed)", result.Report);
+            Assert.Contains("generated column (reviewed)", result.Report);
+        }
+
+        [Fact]
+        public void Database_defaults_count_as_generated_only_on_keys()
+        {
+            // Scaffolded models are full of defaults: a default only fills a column the insert leaves out, so copying a value
+            // into it is normal. On a key, a default such as newid() or NEXT VALUE FOR a sequence generates the key.
+            var result = Generate(Usings + @"
+using Microsoft.EntityFrameworkCore;
+public class Form
+{
+    public System.Guid FormId { get; set; }
+    public string StrAttachmentMethod { get; set; } = """";
+    public bool YsnTextQb { get; set; }
+    public int Version { get; set; }
+    public string StrCity { get; set; } = """";
+    public int Total { get; set; }
+}
+public class Ticket { public int TicketNumber { get; set; } public string StrNote { get; set; } = """"; }
+public class FormInput { public System.Guid FormId { get; set; } public string StrAttachmentMethod { get; set; } = """"; public bool YsnTextQb { get; set; } public int Version { get; set; } public string StrCity { get; set; } = """"; public int Total { get; set; } }
+public class TicketInput { public int TicketNumber { get; set; } public string StrNote { get; set; } = """"; }
+public class Db : DbContext
+{
+    public DbSet<Form> Forms => Set<Form>();
+    public DbSet<Ticket> Tickets => Set<Ticket>();
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Form>(entity =>
+        {
+            entity.HasKey(e => e.FormId);
+            entity.Property(e => e.FormId).HasDefaultValueSql(""(newid())"");
+            entity.Property(e => e.StrAttachmentMethod).HasMaxLength(1).HasDefaultValueSql(""('U')"");
+            entity.Property(e => e.YsnTextQb).HasDefaultValueSql(""((1))"");
+            entity.Property(e => e.Version).HasDefaultValueSql(""((0))"");
+            entity.Property(e => e.Total).HasComputedColumnSql(""([Version]*(2))"");
+        });
+        modelBuilder.Entity<Ticket>(entity =>
+        {
+            entity.HasKey(e => e.TicketNumber);
+            entity.Property(e => e.TicketNumber).HasDefaultValueSql(""(NEXT VALUE FOR [TicketNumbers])"");
+            entity.Property(e => e.StrNote).HasDefaultValueSql(""('')"");
+        });
+    }
+}
+[GeneratedMapper] public static partial class M
+{
+    [MapTruncate(""StrAttachmentMethod"")]
+    public static partial Form ToForm(FormInput input);
+    public static partial Ticket ToTicket(TicketInput input);
+}");
+
+            Assert.Empty(result.CompileErrors);
+            var messages = result.WithId("CM0028").Select(d => d.GetMessage()).OrderBy(m => m, System.StringComparer.Ordinal).ToList();
+            Assert.Equal(3, messages.Count);
+            Assert.Contains(messages, m => m.Contains("writes the database-generated key 'FormId' of the entity 'Form'"));          // newid() on the key
+            Assert.Contains(messages, m => m.Contains("writes the database-generated key 'TicketNumber' of the entity 'Ticket'")); // sequence on the key
+            Assert.Contains(messages, m => m.Contains("writes the database-generated column 'Total' of the entity 'Form'"));     // computed
+            Assert.DoesNotContain(messages, m => m.Contains("StrAttachmentMethod") || m.Contains("YsnTextQb") || m.Contains("'Version'") || m.Contains("StrNote"));
+            Assert.Contains("| Total | `Total` | ⚠ generated column |", result.Report);
+            Assert.Contains("| YsnTextQb | `YsnTextQb` |  |", result.Report);
         }
 
         [Fact]

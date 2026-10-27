@@ -1,6 +1,20 @@
 # Changelog
 
-## 1.9.0 (unreleased)
+## 1.9.1 (2026-10-27)
+
+Fixes from upgrading a large codebase to 1.9.0.
+
+### Source generator
+- **CM0028 no longer reports columns that only have a database default.** 1.9.0 treated any `HasDefaultValueSql(...)` column like an identity or computed column, so scaffolded entities with defaults such as `('U')` or `((1))` got false warnings (build errors with warnings as errors). A default is used only when an insert leaves the column out, so copying a value into it is normal. A default now counts as database-generated only on a key (`newid()`, `NEXT VALUE FOR` a sequence).
+- **CM0028 says "column" for generated columns that aren't keys.** A computed or `ValueGeneratedOnAdd` column was reported as "the database-generated key"; it is now "the database-generated column", and the report note is `generated column` instead of `generated key`. Re-record data-flow snapshots that contain such a column.
+
+### ConventionMapper.Testing
+- Documentation: `AllMappersMatchWriteSets`, and `WritesFrom` with the generated `LineageOf`, compare the generated code with the generator's own record of the mapping configuration. They catch runtime failures and generator bugs, not configuration mistakes: a `[MapMember]` that swaps two members passes both. 1.9.0's docs said otherwise. To check the configuration, state the expected sources with `WritesFrom((Claim c) => c.ToDto(), ("SubmitUserId", "SubmitUser.Id"), ...)`.
+
+### Build
+- The test project rolls forward to newer runtimes, so `build.sh` works on a machine with only the .NET 10 SDK.
+
+## 1.9.0 (2026-10-27)
 
 Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, new kinds of methods, data protection, integrations, migration tooling and behavior tests.
 
