@@ -912,10 +912,15 @@ namespace ConventionMapper.SourceGenerator
                 var cells = inner.Split(new[] { " | " }, StringSplitOptions.None);
                 if (cells.Length < 3) continue;
                 var notes = cells[2].Trim();
-                yield return "<item><term>" + Xml(cells[0].Trim()) + "</term><description>" + Xml(cells[1].Trim().Trim('`')) +
-                             (notes.Length > 0 ? " (" + Xml(notes) + ")" : string.Empty) + "</description></item>";
+                var term = cells[0].Trim();
+                var name = term.EndsWith(" (sensitive)", StringComparison.Ordinal) ? term.Substring(0, term.Length - 12) : term;
+                var doc = section.Docs.TryGetValue(name, out var summary) ? ": " + Xml(summary) : string.Empty;
+                yield return "<item><term>" + Xml(term) + "</term><description>" + Xml(cells[1].Trim().Trim('`')) +
+                             (notes.Length > 0 ? " (" + Xml(notes) + ")" : string.Empty) + doc + "</description></item>";
             }
             yield return "</list>";
+            var writes = WriteSet(method);
+            if (writes.Count > 0) yield return "Writes: " + Xml(string.Join(", ", writes)) + ".";
             yield return "</" + element + ">";
         }
 
@@ -4041,6 +4046,9 @@ namespace ConventionMapper.SourceGenerator
 
             /// <summary>The destination type (as shown).</summary>
             public string Destination { get; set; } = string.Empty;
+
+            /// <summary>Destination member -> the summary of the source member it is copied from, for the generated docs.</summary>
+            public SortedDictionary<string, string> Docs { get; } = new SortedDictionary<string, string>(StringComparer.Ordinal);
         }
 
         private static readonly SymbolDisplayFormat MethodDisplayFormat = new SymbolDisplayFormat(
@@ -4110,6 +4118,15 @@ namespace ConventionMapper.SourceGenerator
             foreach (var member in path) SuggestSensitive(member);
             SuggestSensitive(destinationSymbol);
             foreach (var member in path) CheckObsolete(member, "reads");
+            if (!(path[0] is IParameterSymbol) && (path[path.Count - 1] is IPropertySymbol || path[path.Count - 1] is IFieldSymbol))
+            {
+                var summary = Summary(path[path.Count - 1]);
+                if (summary != null)
+                {
+                    RecordMap(source, destination).Docs[destinationName] = summary;
+                    SuggestDocs(path[path.Count - 1], destinationSymbol, summary);
+                }
+            }
             if (!(path[0] is IParameterSymbol))
             {
                 foreach (var member in path) RecordRead(member);
@@ -4303,6 +4320,68 @@ namespace ConventionMapper.SourceGenerator
             var matches = PersonalNames.Any(p => name == p || (p.Length > 3 && (name.EndsWith(p, StringComparison.Ordinal) || name.StartsWith(p, StringComparison.Ordinal))));
             if (!matches || (isDate && !(name.Contains("birth") || name == "dob"))) return;
             _diagnostics.Add(Diagnostic.Create(Diagnostics.SuggestSensitive, location, (member.ContainingType != null ? Short(member.ContainingType) + "." : string.Empty) + member.Name));
+        }
+
+        // ------------------------------------------------------------------ documentation carried across
+
+        private readonly HashSet<ISymbol> _suggestedDocs = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+        /// <summary>The source member's &lt;summary&gt; as one line of text, or null. Works without documentation parsing too.</summary>
+        private string? Summary(ISymbol member)
+        {
+            string? xml = null;
+            try { xml = member.GetDocumentationCommentXml(cancellationToken: _ct); }
+            catch (Exception) { }
+            var text = Between(xml, "<summary>", "</summary>");
+            if (text == null)
+                foreach (var reference in member.DeclaringSyntaxReferences)
+                {
+                    var node = reference.GetSyntax(_ct);
+                    var declaration = node is VariableDeclaratorSyntax ? node.Parent?.Parent : node;
+                    if (declaration == null) continue;
+                    var lines = declaration.GetLeadingTrivia()
+                        .Where(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) || t.IsKind(SyntaxKind.SingleLineCommentTrivia))
+                        .SelectMany(t => t.ToFullString().Split('\n'))
+                        .Select(l => l.Trim()).Where(l => l.StartsWith("///", StringComparison.Ordinal)).Select(l => l.Substring(3).Trim());
+                    text = Between(string.Join(" ", lines), "<summary>", "</summary>");
+                    if (text != null) break;
+                }
+            if (text == null) return null;
+            // <see cref="T:Shop.Order"/> and <paramref name="x"/> become their names; other tags go.
+            text = System.Text.RegularExpressions.Regex.Replace(text, "<(see|seealso)\\s+(cref|langword|href)=\"(?:[A-Z]:)?([^\"]+)\"\\s*/>", m => m.Groups[3].Value.Substring(m.Groups[3].Value.LastIndexOf('.') + 1));
+            text = System.Text.RegularExpressions.Regex.Replace(text, "<(paramref|typeparamref)\\s+name=\"([^\"]+)\"\\s*/>", "$2");
+            text = System.Text.RegularExpressions.Regex.Replace(text, "<[^>]+>", string.Empty);
+            text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim()
+                .Replace("&lt;", "<").Replace("&gt;", ">").Replace("&amp;", "&");
+            return text.Length == 0 ? null : text;
+        }
+
+        private static string? Between(string? text, string start, string end)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            var from = text!.IndexOf(start, StringComparison.Ordinal);
+            if (from < 0) return null;
+            from += start.Length;
+            var to = text.IndexOf(end, from, StringComparison.Ordinal);
+            return to < 0 ? null : text.Substring(from, to - from);
+        }
+
+        /// <summary>CM0033 (hidden): an undocumented destination member copied from a documented one; the IDE fix copies the summary.</summary>
+        private void SuggestDocs(ISymbol source, ISymbol destination, string summary)
+        {
+            if (!(destination is IPropertySymbol || destination is IFieldSymbol)) return;
+            var location = destination.Locations.FirstOrDefault();
+            if (location == null || !location.IsInSource || !_suggestedDocs.Add(destination)) return;
+            foreach (var reference in destination.DeclaringSyntaxReferences)
+            {
+                var node = reference.GetSyntax(_ct);
+                var declaration = node is VariableDeclaratorSyntax ? node.Parent?.Parent : node;
+                if (declaration != null && declaration.GetLeadingTrivia().Any(t => t.ToFullString().TrimStart().StartsWith("///", StringComparison.Ordinal))) return;
+            }
+            var from = (source.ContainingType != null ? Short(source.ContainingType) + "." : string.Empty) + source.Name;
+            _diagnostics.Add(Diagnostic.Create(Diagnostics.CopyDocumentation, location,
+                ImmutableDictionary<string, string?>.Empty.Add("Summary", summary).Add("Source", from),
+                (destination.ContainingType != null ? Short(destination.ContainingType) + "." : string.Empty) + destination.Name, from));
         }
 
         // ------------------------------------------------------------------ lineage and source reads

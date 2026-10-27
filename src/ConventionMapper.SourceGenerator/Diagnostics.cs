@@ -152,6 +152,11 @@ namespace ConventionMapper.SourceGenerator
             "'{0}' {1} '{2}', which is [Obsolete]{3}",
             Category, DiagnosticSeverity.Warning, true, helpLinkUri: HelpLink);
 
+        public static readonly DiagnosticDescriptor CopyDocumentation = new DiagnosticDescriptor(
+            "CM0033", "Destination member can take the source member's documentation",
+            "'{0}' has no documentation; it is copied from '{1}', which has",
+            Category, DiagnosticSeverity.Hidden, true, helpLinkUri: HelpLink);
+
         public static readonly DiagnosticDescriptor UnknownAttributeMember = new DiagnosticDescriptor(
             "CM0008", "Unknown member in mapping attribute",
             "'{0}' in [{1}] on '{2}' does not match any member",

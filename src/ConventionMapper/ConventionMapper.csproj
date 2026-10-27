@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- .NET Standard 2.0 (covers .NET Framework 4.6.1+), plus modern .NET -->
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <!-- Annotations are complete: trimmed and AOT apps get one warning where they create a MapperConfiguration. -->
+    <IsAotCompatible Condition="'$(TargetFramework)' == 'net8.0'">true</IsAotCompatible>
     <LangVersion>latest</LangVersion>
     <Nullable>annotations</Nullable>
     <RootNamespace>ConventionMapper</RootNamespace>
