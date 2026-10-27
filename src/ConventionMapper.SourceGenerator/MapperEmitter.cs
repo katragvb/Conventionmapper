@@ -320,6 +320,50 @@ namespace ConventionMapper.SourceGenerator
             w.Outdent();
             EmitWriteSetOf(methods, w);
             EmitLineage(methods, w);
+            EmitGeneratedCode(methods, w);
+        }
+
+        /// <summary>
+        /// GeneratedCode and GeneratedCodeOf(nameof(M), typeof(...)): each method's generated code, so a test can snapshot one
+        /// mapper (MapperAssert.GeneratedCodeMatches). Emitted as marked lines, kept only with ConventionMapperEmbedGeneratedCode.
+        /// </summary>
+        private void EmitGeneratedCode(List<IMethodSymbol> methods, CodeWriter w)
+        {
+            if (!_mapper.GetMembers("GeneratedCode").IsEmpty || !_mapper.GetMembers("GeneratedCodeOf").IsEmpty) return;
+            var t = new CodeWriter(_memberIndent);
+            t.Line();
+            t.Line("/// <summary>The generated code of each mapping method (keys as in WriteSets), for snapshot tests.</summary>");
+            t.Line("internal static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> GeneratedCode =");
+            t.Indent();
+            t.Line("new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)");
+            t.Line("{");
+            t.Indent();
+            var names = methods.GroupBy(m => m.Name).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            foreach (var method in methods)
+            {
+                var code = _methodCode.TryGetValue(method, out var text) ? Dedent(text) : string.Empty;
+                var literal = SymbolDisplay.FormatLiteral(code, true);
+                t.Line("[" + SymbolDisplay.FormatLiteral(MethodDisplay(method), true) + "] = " + literal + ",");
+                if (names[method.Name] == 1) t.Line("[" + SymbolDisplay.FormatLiteral(method.Name, true) + "] = " + literal + ",");
+            }
+            t.Outdent();
+            t.Line("};");
+            t.Outdent();
+            EmitAccessor(methods, t, "GeneratedCodeOf", "GeneratedCode", "string",
+                "The generated code of the method <paramref name=\"method\"/>. Pass its parameter types when it has overloads:",
+                "<c>GeneratedCodeOf(nameof(ToDto), typeof(Order))</c>. Throws when no generated method matches.");
+            foreach (var line in t.ToString().Split('\n'))
+                if (line.Trim().Length > 0) w.Raw(CodeMarker + line + "\n");
+        }
+
+        /// <summary>The method's code without the class's indentation and without the generator's markers, with LF line endings.</summary>
+        private static string Dedent(string code)
+        {
+            var lines = code.Replace("\r\n", "\n").Split('\n')
+                .Where(l => l.IndexOf(MemberMarker, StringComparison.Ordinal) < 0 && l.IndexOf(DocMarker, StringComparison.Ordinal) < 0).ToList();
+            while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
+            var indent = lines.Where(l => l.Trim().Length > 0).Select(l => l.Length - l.TrimStart(' ').Length).DefaultIfEmpty(0).Min();
+            return string.Join("\n", lines.Select(l => l.Length >= indent ? l.Substring(indent) : l.TrimStart(' '))) + "\n";
         }
 
         /// <summary>
@@ -479,6 +523,7 @@ namespace ConventionMapper.SourceGenerator
             EmitMethodBody(method, w);
             w.Close();
             FlushUnmapped(method);
+            _methodCode[method] = w.ToString();
 
             // Optional XML docs listing where each member comes from (MSBuild: ConventionMapperGeneratedDocs=true).
             foreach (var line in MethodDocs(method, syntax)) output.Line(DocMarker + line);
@@ -879,6 +924,14 @@ namespace ConventionMapper.SourceGenerator
 
         /// <summary>Doc lines carry this prefix; the generator turns them into "///" comments or drops them, per the MSBuild option.</summary>
         internal const string DocMarker = "//#cm-doc ";
+
+        /// <summary>
+        /// Lines of the GeneratedCode dictionary and GeneratedCodeOf accessor carry this prefix; the generator keeps them when
+        /// ConventionMapperEmbedGeneratedCode is true and drops them otherwise.
+        /// </summary>
+        internal const string CodeMarker = "//#cm-code ";
+
+        private readonly Dictionary<IMethodSymbol, string> _methodCode = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
 
         /// <summary>Before each generated method and class; the generator turns it into [GeneratedCode] and [ExcludeFromCodeCoverage].</summary>
         internal const string MemberMarker = "//#cm-member";

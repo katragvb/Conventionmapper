@@ -5,10 +5,18 @@ using ConventionMapper.Generated;
 
 namespace ConventionMapper.Tests
 {
+    /// <summary>Tests that change CONVENTIONMAPPER_UPDATE_SNAPSHOTS run one after another.</summary>
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class SnapshotCollection
+    {
+        public const string Name = "Snapshots";
+    }
+
     /// <summary>
     /// The snapshot helpers the generator writes into this assembly (DataFlowReport.AssertMatches / AssertMatchesDirectory).
     /// Kept in one class: the tests change the CONVENTIONMAPPER_UPDATE_SNAPSHOTS environment variable.
     /// </summary>
+    [Collection(SnapshotCollection.Name)]
     public class DataFlowSnapshotTests : IDisposable
     {
         private readonly string _folder = Path.Combine(Path.GetTempPath(), "cm-snapshots-" + Guid.NewGuid().ToString("N"));

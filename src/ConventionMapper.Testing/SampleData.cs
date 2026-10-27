@@ -33,6 +33,25 @@ namespace ConventionMapper.Testing
             return new Filler(options ?? SampleDataOptions.Default).Value(type, type.Name, 0, null);
         }
 
+        /// <summary>
+        /// <paramref name="count"/> instances that share one sequence, so every value is distinct across them too
+        /// (not only within one object).
+        /// </summary>
+        internal static List<object?> CreateMany(Type type, int count, SampleDataOptions? options)
+        {
+            var filler = new Filler(options ?? SampleDataOptions.Default);
+            var result = new List<object?>(count);
+            for (var i = 0; i < count; i++) result.Add(filler.Value(type, type.Name, 0, null));
+            return result;
+        }
+
+        /// <summary>
+        /// A fluent builder for a test object: starts from a filled <typeparamref name="T"/> (or a blank one with
+        /// <see cref="Builder{T}.Blank"/>) and sets the members a test cares about:
+        /// <c>SampleData.Builder&lt;Referral&gt;().With(r =&gt; r.Status, "A").With(r =&gt; r.Address.City, "Leeds").Build()</c>.
+        /// </summary>
+        public static Builder<T> Builder<T>(SampleDataOptions? options = null) => new Builder<T>(options);
+
         /// <summary>A value for a method parameter (used by MapperAssert for the extra parameters of a mapping method).</summary>
         internal static object? CreateParameter(ParameterInfo parameter, SampleDataOptions? options) =>
             new Filler(options ?? SampleDataOptions.Default).Value(parameter.ParameterType, parameter.Name ?? parameter.ParameterType.Name, 0,

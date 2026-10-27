@@ -61,6 +61,19 @@ namespace Shop
         }
 
         [Fact]
+        public void Generated_code_is_embedded_only_when_asked()
+        {
+            var off = GeneratorHarness.Generate(Code);
+            Assert.DoesNotContain("GeneratedCodeOf", off.Source);
+            Assert.DoesNotContain("#cm-code", off.Source);
+
+            var on = GeneratorHarness.Generate(Code, new Dictionary<string, string> { ["ConventionMapperEmbedGeneratedCode"] = "true" });
+            Assert.Empty(on.CompileErrors);
+            Assert.Contains("internal static string GeneratedCodeOf(string method, params global::System.Type[] parameterTypes)", on.Source);
+            Assert.Contains("[\"ToDto(Referral)\"] = \"public static partial global::Shop.ReferralDto ToDto(global::Shop.Referral referral)\\n{", on.Source);
+        }
+
+        [Fact]
         public void Undocumented_destination_members_offer_the_source_summary()
         {
             var result = GeneratorHarness.Generate(Code);

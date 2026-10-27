@@ -71,12 +71,18 @@ namespace ConventionMapper.SourceGenerator
             var memberOptions = excludeCoverage.Combine(attributes).Select(static (pair, _) =>
                 new MemberAttributes(pair.Right.Item1, pair.Left && pair.Right.Item2));
 
-            context.RegisterSourceOutput(mappers.Combine(docs).Combine(memberOptions), static (spc, pair) =>
+            // <ConventionMapperEmbedGeneratedCode>true</ConventionMapperEmbedGeneratedCode>: each mapper gets GeneratedCodeOf(...) for
+            // snapshot tests of its generated code (MapperAssert.GeneratedCodeMatches).
+            var embedCode = context.AnalyzerConfigOptionsProvider.Select(static (options, _) =>
+                options.GlobalOptions.TryGetValue("build_property.ConventionMapperEmbedGeneratedCode", out var value) &&
+                string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase));
+
+            context.RegisterSourceOutput(mappers.Combine(docs).Combine(memberOptions).Combine(embedCode), static (spc, pair) =>
             {
-                var result = pair.Left.Left;
+                var result = pair.Left.Left.Left;
                 foreach (var diagnostic in result.Diagnostics) spc.ReportDiagnostic(diagnostic);
                 if (result.Source != null)
-                    spc.AddSource(result.HintName, Text(ApplyMemberAttributes(ApplyDocs(result.Source, pair.Left.Right), pair.Right)));
+                    spc.AddSource(result.HintName, Text(ApplyEmbeddedCode(ApplyMemberAttributes(ApplyDocs(result.Source, pair.Left.Left.Right), pair.Left.Right), pair.Right)));
             });
 
             // One data-flow report per assembly, with a section per mapper class.
@@ -154,6 +160,26 @@ namespace ConventionMapper.SourceGenerator
                 {
                     if (attribute.Length == 0) continue;
                     line = line.Substring(0, marker) + attribute;
+                }
+                sb.Append(line);
+                if (i < lines.Length - 1) sb.Append('\n');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Keeps the emitter's GeneratedCode lines (without the marker), or removes them.</summary>
+        internal static string ApplyEmbeddedCode(string source, bool embed)
+        {
+            if (source.IndexOf(MapperEmitter.CodeMarker, StringComparison.Ordinal) < 0) return source;
+            var lines = source.Split('\n');
+            var sb = new StringBuilder(source.Length);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (line.StartsWith(MapperEmitter.CodeMarker, StringComparison.Ordinal))
+                {
+                    if (!embed) continue;
+                    line = line.Substring(MapperEmitter.CodeMarker.Length);
                 }
                 sb.Append(line);
                 if (i < lines.Length - 1) sb.Append('\n');

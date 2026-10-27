@@ -5,6 +5,8 @@
     <TargetFrameworks>net8.0</TargetFrameworks>
     <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net8.0;net48</TargetFrameworks>
     <LangVersion>latest</LangVersion>
+    <!-- GeneratedCodeOf on every mapper, for the MapperAssert.GeneratedCodeMatches tests. -->
+    <ConventionMapperEmbedGeneratedCode>true</ConventionMapperEmbedGeneratedCode>
     <Nullable>annotations</Nullable>
     <IsPackable>false</IsPackable>
     <!-- Normally set by the ConventionMapper package's build targets (project references don't import them). -->
@@ -47,6 +49,11 @@
     <!-- Runs the source generator on this project (end-to-end tests) and references it for the generator driver tests. -->
     <ProjectReference Include="..\..\src\ConventionMapper.SourceGenerator\ConventionMapper.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
     <ProjectReference Include="..\..\src\ConventionMapper.Analyzers\ConventionMapper.Analyzers.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A project reference doesn't import the package's props, so expose the generator's property here. -->
+    <CompilerVisibleProperty Include="ConventionMapperEmbedGeneratedCode" />
     <ProjectReference Include="..\..\src\ConventionMapper.Testing\ConventionMapper.Testing.csproj" />
   </ItemGroup>
 
