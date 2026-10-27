@@ -2,11 +2,13 @@
 
 ## 1.9.0 (unreleased)
 
-Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, data protection, migration tooling and behavior tests.
+Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, new kinds of methods, data protection, integrations, migration tooling and behavior tests.
 
 **Upgrading:**
 - `[MapInherit]` naming a method with several matching overloads is now error CM0019 (1.8.0 silently took the one with the fewest parameters); add the parameter types: `[MapInherit(nameof(ToDto), typeof(Order))]`.
-- New warnings can appear on existing maps: CM0028 (a map writes a database-generated key or a navigation into an EF Core entity) and CM0027 (a string can be longer than an entity column allows). Both point at real risks; fix them, or acknowledge each with `[MapReviewed]`. With warnings as errors, check before upgrading.
+- New warnings can appear on existing code: CM0028 (a map writes a database-generated key or a navigation into an EF Core entity), CM0027 (a string can be longer than an entity column allows), CM0030 (a conversion method uses the current culture), CM0031 (a map uses an `[Obsolete]` member) and CM0032 (`[Sensitive]` data passed to a logger, exception message or `ToString()`, including records with `[Sensitive]` properties). Each points at a real risk; fix it, or acknowledge map warnings with `[MapReviewed]`. With warnings as errors, check before upgrading.
+- Generated members are marked `[ExcludeFromCodeCoverage]`, so coverage percentages change. `<ConventionMapperExcludeFromCodeCoverage>false</ConventionMapperExcludeFromCodeCoverage>` keeps them in.
+- Generated text conversions (`ToString()`, `Parse`) now always use the invariant culture. Code that relied on the server's culture gets invariant text.
 - Re-record data-flow snapshots (`CONVENTIONMAPPER_UPDATE_SNAPSHOTS=1`): plain `Id` / `…Id` names are no longer flagged as keys, and the report has new sections.
 
 ### Source generator
@@ -34,6 +36,7 @@ Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, d
 - New docs section: copying one entity to another (explicit mode, keys as parameters, navigations left alone).
 
 ### Data protection
+- **CM0032 (warning):** an object with `[Sensitive]` members (directly, nested or in collections) passed to an `ILogger` or Serilog call or a `[LoggerMessage]` method, put into an exception message, or printed by a `ToString()` override or a record's generated `ToString()`. Logging is the most common leak path.
 - **CM0026 (info):** a copied member whose name looks personal (`Ssn`, `TaxId`, `DateOfBirth`, `Email`, `Phone`, `BankAccount`, also with prefixes such as `StrSsn`) isn't `[Sensitive]`. The fix *Mark [Sensitive]* adds the attribute.
 - **`[MapRedact] T Redact(T value)`**: a copy with every `[Sensitive]` member masked, deeply.
 - **`[MapLogString] string ToLogString(T value)`**: log-safe text, `Person { Id = 7, Ssn = *** }`.
@@ -49,6 +52,37 @@ Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, d
 ### Migration
 - **CM0029 (info):** object initializers and conversion operators that copy three or more same-name members by hand (threshold `conventionmapper.copy_min_members`). *Convert to generated mapping* creates an explicit-mode mapping method (`[MapExplicit]`, `[MapMember]`, `[MapConstant]`, parameters for the rest) and calls it; for operators, *Replace the operator with a generated mapping (update call sites)* removes the operator and rewrites its implicit and explicit uses across the solution. Raise the severity to warning to list every candidate in the build output.
 
+### New kinds of methods
+- **`[MapPatch]`** on an update method: copies only members the caller set; null values and `Optional<T>`-shaped wrappers without a value leave the target unchanged.
+- **`[MapCombine]`** with **`[MapPrefer("saved", "City")]`**: one object from several sources, each member from the first source that has a value.
+- **`[MapWhen("Discount", nameof(IsEligible))]`**: a member written only when a predicate holds (create, update and projections), shown in the report.
+- **Database rows:** `T Read(IDataRecord row)` and `List<T> ReadAll(IDataReader reader)` with ordinals and column types looked up once, typed getters and `DBNull` handling; no reflection.
+- **`[MapClone]`** deep copies, **`[MapEquality]`** `IEqualityComparer<T>` over the mapped members, **`[MapPreserveReferences]`** for shared instances and cycles.
+- **`[MapValidate]`**: `Validate(T)` from maximum lengths, required members and `[Range]`.
+- Each `IQueryable` projection also gets its expression as a property (`ProjectToDtoExpression`) for composing with other queries, OData or specifications.
+
+### Correctness
+- Text conversions in generated code use the invariant culture; **`[MapFormat("EffectiveDate", "yyyy-MM-dd")]`** fixes a format per member. **CM0030** flags culture-dependent parsing and formatting in conversion and `[MapFrom]` methods.
+- **`[MapChecked("Count")]`**: narrowing conversions (`long` → `int`, `decimal` → `double`) and `DateTime` → `DateOnly` throw `OverflowException` naming the member instead of losing data. `DateTime` → `DateOnly` / `TimeOnly` is CM0016 without it.
+- **CM0031:** a map reads or writes an `[Obsolete]` member.
+
+### Integrations
+- **Protobuf:** `Timestamp` ↔ `DateTime` / `DateTimeOffset`, `Duration` ↔ `TimeSpan`, `ByteString` ↔ `byte[]`, `repeated` and `map` fields (filled with `Add`), `oneof`, and null strings skipped instead of throwing.
+- **Immutable and frozen collections** (`ImmutableArray`, `ImmutableList`, `ImmutableHashSet`, `ImmutableDictionary`, `FrozenSet`, `FrozenDictionary`) through their builders; get-only collections are filled with `Add`.
+- **`[MapUse(typeof(SharedMappings))]`**: nested members use mapping methods of another class, such as shared maps in a referenced project.
+- Generated members get `[GeneratedCode]` and `[ExcludeFromCodeCoverage]`; the committed `Generated/` folder is excluded from SonarQube.
+- Collection maps avoid LINQ and iterate lists through a span on .NET 5 and later.
+
+### Documentation and IDE
+- **Every diagnostic links to its own section** of the new [docs/diagnostics.md](https://github.com/katragvb/Conventionmapper/blob/main/docs/diagnostics.md) (cause, example, fix).
+- Generated method docs (`ConventionMapperGeneratedDocs`) carry each source member's `<summary>` and the method's write set, so hovering a mapping method shows where every value comes from.
+- **CM0033 (hidden):** *Copy documentation from 'Order.Status'* adds the source member's summary to an undocumented destination member.
+- Design rules recorded in [docs/adr](https://github.com/katragvb/Conventionmapper/blob/main/docs/adr/README.md), planned work in [ROADMAP.md](https://github.com/katragvb/Conventionmapper/blob/main/ROADMAP.md).
+
+### Runtime package
+- `IsAotCompatible`: trimmed and Native AOT apps get one warning where they create a `MapperConfiguration` (pointing to the source generator), instead of warnings from inside the library.
+- **CM0032** for projects without the source generator.
+
 ### Generated code in the repository
 - CI is also detected from `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILDKITE`, `TEAMCITY_VERSION`, `CIRCLECI`, `BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID` and `HARNESS_BUILD_ID`. Systems that set none of them (Concourse) need `-p:ConventionMapperCheckGeneratedCode=true`.
 - A build that rewrites the generated files says so in the build log, so a CI system that isn't detected is visible.
@@ -61,6 +95,8 @@ Fixes from adopting 1.8.0 in a large codebase, plus values, EF Core awareness, d
 - **`MapperAssert.RoundTrips(to, back)`**: deep comparison of `back(to(x))` with `x`; `runs: 100` uses randomized inputs (nulls, empty and long strings, extremes) and reports the failing seed.
 - **`MapperAssert.AllMethodsUsed(typeof(Mappings), productionAssemblies)`**: maps no production code uses.
 - **`SampleDataOptions`**: per-type and per-member values, enum subsets, factories for interfaces and types without a usable constructor, collection size, depth, and a seeded random mode. `SampleData` also uses private parameterless constructors.
+- **`SampleData.Builder<T>()`**: fluent test objects, `.With(r => r.Address.City, "Leeds").Without(r => r.ClosedOn).Build()`, with nested paths, guarded setters and `BuildMany` with distinct values.
+- **`MapperAssert.GeneratedCodeMatches`** and **`GeneratedCodeMatchesDirectory`**: snapshot each method's generated code in its own file (needs `ConventionMapperEmbedGeneratedCode` in the mapper's project).
 
 ## 1.8.0 (2026-10-26)
 

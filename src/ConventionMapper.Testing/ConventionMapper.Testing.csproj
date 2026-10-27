@@ -16,7 +16,7 @@
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
-    <Description>Test helpers for ConventionMapper and ConventionMapper.SourceGenerator mappings: MapperAssert.WritesExactly checks exactly which destination members a map writes, WritesFrom checks each value comes from the right source member (using the generated lineage), AllMappersMatchWriteSets gives every generated map a baseline test, RoundTrips checks map/reverse-map pairs with randomized inputs, and AllMethodsCovered / AllMethodsUsed find untested and unused maps. Works with any test framework.</Description>
+    <Description>Test helpers for ConventionMapper and ConventionMapper.SourceGenerator mappings: MapperAssert.WritesExactly checks exactly which destination members a map writes, WritesFrom checks each value comes from the right source member (using the generated lineage), AllMappersMatchWriteSets gives every generated map a baseline test, RoundTrips checks map/reverse-map pairs with randomized inputs, AllMethodsCovered / AllMethodsUsed find untested and unused maps, SampleData.Builder builds test objects fluently, and GeneratedCodeMatches snapshots generated code per mapper. Works with any test framework.</Description>
     <PackageTags>mapper;object-mapper;mapping;testing;unit-testing;source-generator</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>

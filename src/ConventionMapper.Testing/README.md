@@ -85,6 +85,27 @@ MapperAssert.RoundTrips<Person, PersonLite>(Mappings.ToLite, Mappings.FromLite, 
 A failure lists the member paths that changed, or the exception, with the seed of that run. Replay it with
 `options: new SampleDataOptions().Randomized(seed)`.
 
+## Snapshots of the generated code
+
+A library upgrade or an attribute change can alter what the generator writes for a mapper. Snapshot one method's generated
+code in its own file, so the change fails a test that names that mapper:
+
+```csharp
+[Fact]
+public void ToDto_generated_code_is_reviewed() =>
+    MapperAssert.GeneratedCodeMatches(typeof(Mappings), nameof(Mappings.ToDto), new[] { typeof(Order) });
+    // generated-code/Mappings.ToDto(Order).cs, next to this test file
+
+[Fact]
+public void Generated_code_is_reviewed() =>
+    MapperAssert.GeneratedCodeMatchesDirectory(typeof(Mappings));   // generated-code/Mappings/<method>.cs, one per method
+```
+
+The project that contains the mapper needs `<ConventionMapperEmbedGeneratedCode>true</ConventionMapperEmbedGeneratedCode>`.
+A missing file is created and the test fails once so it gets reviewed and committed; a change fails with a line diff; run the
+tests with `CONVENTIONMAPPER_UPDATE_SNAPSHOTS=1` to accept changes. In directory mode, a file for a method that no longer exists
+fails as stale.
+
 ## Is every mapping method tested?
 
 ```csharp
@@ -138,6 +159,24 @@ options.FillNonPublicSetters = true;  // also private and init-only setters
 
 var address = SampleData.Create<Address>(options);
 ```
+
+### Builders
+
+`SampleData.Builder<T>()` starts from a filled object and sets only what a test cares about, so setup stays short:
+
+```csharp
+var referral = SampleData.Builder<Referral>()
+    .With(r => r.Status, "A")
+    .With(r => r.Address.City, "Leeds")      // nested; missing objects on the way are created
+    .Without(r => r.ClosedOn)                // null / default
+    .Build();
+
+var referrals = SampleData.Builder<Referral>().With(r => r.Number, i => 1000 + i).BuildMany(3);   // distinct values
+var blank = SampleData.Builder<Referral>().Blank().With(r => r.Id, 7).Build();                     // start empty
+```
+
+Private and init-only setters and get-only auto-properties can be set, so entities that guard their state can be built too.
+`Configure(r => ...)` runs any other setup, and builders take the same `SampleDataOptions`.
 
 `Randomized(seed)` switches to random edge cases, repeatable with the seed. Random values no longer carry member names,
 so `WritesFrom` and `AllMappersMatchWriteSets` refuse it; it is meant for `RoundTrips` and your own tests.
