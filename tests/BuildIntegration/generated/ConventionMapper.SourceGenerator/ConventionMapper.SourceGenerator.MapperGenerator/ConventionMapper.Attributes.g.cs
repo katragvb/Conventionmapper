@@ -258,6 +258,165 @@ namespace ConventionMapper
     {
     }
 
+    /// <summary>
+    /// Makes an update method a PATCH: a member is copied only when the caller set it. A null source value (string?, int?)
+    /// or an Optional&lt;T&gt;-shaped wrapper without a value (HasValue is false) leaves the target member unchanged.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapPatchAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Combines several sources into one object: <c>[MapCombine] Policy Combine(Policy entered, Policy saved, Policy defaults)</c>.
+    /// Each member takes the first source, in parameter order, that has a value (not null; for value types, not the default).
+    /// [MapPrefer] changes the order for single members.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapCombineAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>In a [MapCombine] method, the named members prefer this source parameter: <c>[MapPrefer("saved", "City")]</c>.</summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapPreferAttribute : global::System.Attribute
+    {
+        public MapPreferAttribute(string source, params string[] members)
+        {
+            Source = source;
+            Members = members;
+        }
+
+        public string Source { get; }
+        public string[] Members { get; }
+    }
+
+    /// <summary>
+    /// Writes a destination member only when a static bool method of the mapper class (taking the source, then extra
+    /// parameters by name) returns true: <c>[MapWhen("Discount", nameof(IsEligible))]</c>. Otherwise the member keeps its value.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapWhenAttribute : global::System.Attribute
+    {
+        public MapWhenAttribute(string destination, string predicate)
+        {
+            Destination = destination;
+            Predicate = predicate;
+        }
+
+        public string Destination { get; }
+        public string Predicate { get; }
+    }
+
+    /// <summary>Makes <c>T Clone(T value)</c> a deep copy: nested objects and collections are copied too, not shared.</summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapCloneAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Makes <c>IEqualityComparer&lt;T&gt; Comparer()</c> return a comparer over T's members (nested objects and collections
+    /// compared by value), with [MapIgnore] for members to leave out: a "did anything change?" check before saving.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapEqualityAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Keeps shared references and cycles: an object reached twice in the source maps to one destination object, and a cycle
+    /// does not recurse forever. Costs a dictionary lookup per object.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapPreserveReferencesAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Formats or parses a member with a fixed format in the invariant culture: <c>[MapFormat("EffectiveDate", "yyyy-MM-dd")]</c>
+    /// writes <c>ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</c>, or <c>ParseExact</c> from a string.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapFormatAttribute : global::System.Attribute
+    {
+        public MapFormatAttribute(string destination, string format)
+        {
+            Destination = destination;
+            Format = format;
+        }
+
+        public string Destination { get; }
+        public string Format { get; }
+    }
+
+    /// <summary>
+    /// Conversions that can lose data (long to int, decimal to double, DateTime to DateOnly) are checked for the named members:
+    /// a value out of range, or one that would lose its time part, throws OverflowException naming the member.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class | global::System.AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapCheckedAttribute : global::System.Attribute
+    {
+        public MapCheckedAttribute(params string[] members)
+        {
+            Members = members;
+        }
+
+        public string[] Members { get; }
+    }
+
+    /// <summary>
+    /// Makes <c>IReadOnlyList&lt;(string Member, string Message)&gt; Validate(T value)</c> check T against what the generator
+    /// knows: maximum lengths ([MaxLength], [StringLength], the EF model), [Required] and non-nullable reference members,
+    /// and [Range]. An empty list means valid.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapValidateAttribute : global::System.Attribute
+    {
+    }
+
+    /// <summary>
+    /// Nested members also use the public static mapping methods of another class, such as shared maps in a referenced
+    /// project: <c>[MapUse(typeof(SharedMappings))]</c>. The mapper's own methods win.
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class MapUseAttribute : global::System.Attribute
+    {
+        public MapUseAttribute(global::System.Type mappings)
+        {
+            Mappings = mappings;
+        }
+
+        public global::System.Type Mappings { get; }
+    }
+
+    /// <summary>
+    /// Generates a fluent builder for a type on a partial class: <c>[GeneratedBuilder(typeof(Order))] partial class OrderBuilder { }</c>
+    /// gets <c>WithStatus(...)</c> for each settable member and <c>Build()</c>. Start from an existing object with the
+    /// constructor that takes one (SampleData.Create&lt;Order&gt;() in tests).
+    /// </summary>
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class, Inherited = false)]
+    [global::System.Diagnostics.Conditional("CONVENTIONMAPPER_KEEP_ATTRIBUTES")]
+    internal sealed class GeneratedBuilderAttribute : global::System.Attribute
+    {
+        public GeneratedBuilderAttribute(global::System.Type type)
+        {
+            Type = type;
+        }
+
+        public global::System.Type Type { get; }
+    }
+
     /// <summary>One member that differs, returned by a generated <c>IReadOnlyList&lt;FieldChange&gt; Diff(TBefore before, TAfter after)</c> method.</summary>
     internal sealed class FieldChange
     {
