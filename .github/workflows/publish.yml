@@ -5,6 +5,7 @@ on:
     branches: [ main, 'feature/**', 'fix/**' ]
     tags: [ 'v*' ]          # push tag v1.2.3 to publish 1.2.3 to nuget.org
   pull_request:
+  workflow_dispatch:        # run manually on main to publish <version>-preview.<run> packages (see RELEASING.md)
 
 permissions:
   contents: read
@@ -41,8 +42,37 @@ jobs:
       - name: Run the native binary
         run: ./aot-out/ConventionMapper.Sample.Aot
 
+  sqlserver:
+    # ConventionMapper.Testing.EntityFrameworkCore's SQL Server paths (round trips with foreign keys switched off and CHECK
+    # constraints on, schema comparison) against a real SQL Server. Fails if the tests were skipped instead of run.
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Cm_ci_Passw0rd!'   # a throwaway container on the runner, not a secret
+        ports: [ '1433:1433' ]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Cm_ci_Passw0rd!' -Q 'SELECT 1' -b"
+          --health-interval 10s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: SQL Server tests
+        env:
+          CONVENTIONMAPPER_SQLSERVER: 'Server=localhost,1433;User Id=sa;Password=Cm_ci_Passw0rd!;TrustServerCertificate=True'
+        run: |
+          set -o pipefail
+          dotnet test tests/ConventionMapper.Tests/ConventionMapper.Tests.csproj -c Release -f net8.0 \
+            --filter "FullyQualifiedName~SqlServerDatabaseAssertTests" --logger GitHubActions --logger "console;verbosity=normal" | tee sqlserver.log
+          grep -Eq "Skipped: +0," sqlserver.log || { echo "SQL Server tests were skipped instead of run"; exit 1; }
+          grep -Eq "Passed: +[1-9]" sqlserver.log || { echo "No SQL Server test ran"; exit 1; }
+
   pack:
-    needs: [ test, aot ]
+    needs: [ test, aot, sqlserver ]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,15 +88,16 @@ jobs:
 
       - name: Compute version
         id: version
-        # Tags publish the release. Pushes to main publish a preview of the next release (consumers can try a change before
-        # it is tagged), unless that version is already released: 1.9.1-preview.N would sort below the released 1.9.1.
-        # Other branches and pull requests only build -ci.N packages as artifacts.
+        # Tags publish the release. A manual run on main (workflow_dispatch) publishes a preview of the next release, so a
+        # change can be tried in a real codebase before it is tagged, unless that version is already released:
+        # 1.9.1-preview.N would sort below the released 1.9.1. Previews are permanent on nuget.org (they can be unlisted, not
+        # deleted), so they are published on request, not on every push. Everything else builds -ci.N artifacts only.
         run: |
           base=$(grep -oPm1 '(?<=<Version>)[^<]+' src/ConventionMapper/ConventionMapper.csproj)
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_REF}" == refs/heads/main && -z "$(git tag -l "v${base}")" ]]; then
+          elif [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && "${GITHUB_REF}" == refs/heads/main && -z "$(git tag -l "v${base}")" ]]; then
             echo "value=${base}-preview.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else

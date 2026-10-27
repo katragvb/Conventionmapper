@@ -1,7 +1,9 @@
 # Releasing
 
-Every push to `main` publishes `<version>-preview.<run>` packages to nuget.org (unless `<version>` is already released), and a
-`v<version>` tag publishes the release. Both 1.9.0 problems (a false positive on scaffolded EF Core models, and a fix that
+Running the `build-and-publish` workflow manually on `main` (Actions → build-and-publish → Run workflow) publishes
+`<version>-preview.<run>` packages to nuget.org, unless `<version>` is already released, and a `v<version>` tag publishes the
+release. Previews are published on request rather than on every push because nuget.org keeps every version: they can be
+unlisted, not deleted. Both 1.9.0 problems (a false positive on scaffolded EF Core models, and a fix that
 existed only in a local copy) would have been caught by the steps below.
 
 ## Before tagging
@@ -11,8 +13,9 @@ existed only in a local copy) would have been caught by the steps below.
 2. **Versions and notes.** `<Version>` in `src/ConventionMapper`, `src/ConventionMapper.SourceGenerator`,
    `src/ConventionMapper.Testing` and `src/ConventionMapper.Testing.EntityFrameworkCore` is the version being released, and
    `CHANGELOG.md` has its section (dated) with an **Upgrading** list of new warnings and behavior changes.
-3. **CI is green on `main`**, including the Windows (.NET Framework) tests, the build-integration check and the AOT sample.
-4. **Try the preview in a real codebase.** Reference the `-preview.<run>` packages from the `main` build in at least one
+3. **CI is green on `main`**, including the Windows (.NET Framework) tests, the SQL Server tests, the build-integration check
+   and the AOT sample.
+4. **Try the preview in a real codebase.** Run the workflow manually on `main`, then reference its `-preview.<run>` packages in at least one
    consumer (a large project with scaffolded EF Core entities and warnings as errors is the best test), build it, run its
    tests, and read every new diagnostic. A warning that is wrong there is a bug to fix before tagging, not a `[MapReviewed]`.
 5. **Re-record that consumer's snapshots** (`CONVENTIONMAPPER_UPDATE_SNAPSHOTS=1`) and read the diff: it shows what the

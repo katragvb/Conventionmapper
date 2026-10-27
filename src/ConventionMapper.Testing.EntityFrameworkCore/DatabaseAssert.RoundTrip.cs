@@ -210,19 +210,38 @@ namespace ConventionMapper.Testing.EntityFrameworkCore
             }
         }
 
-        /// <summary>Foreign keys are checked at commit (SQLite) or not at all (SQL Server) inside the rolled-back transaction.</summary>
+        /// <summary>
+        /// Foreign keys are checked at commit (SQLite) or not at all (SQL Server) inside the rolled-back transaction, so no
+        /// related rows need seeding. Only foreign keys: CHECK constraints, NOT NULL and unique indexes stay on, so a value the
+        /// database rejects still fails the round trip. On SQL Server, ALTER TABLE is part of the transaction and rolled back.
+        /// </summary>
         private static void SkipForeignKeyChecks(DbContext context, IEntityType entityType)
         {
+            var connection = context.Database.GetDbConnection();
             if (IsSqlServer(context))
             {
                 var table = entityType.GetTableName();
                 if (table == null) return;
                 var schema = entityType.GetSchema() ?? context.Model.GetDefaultSchema() ?? "dbo";
-                context.Database.ExecuteSqlRaw("ALTER TABLE " + Quote(schema) + "." + Quote(table) + " NOCHECK CONSTRAINT ALL");
+                var qualified = Quote(schema) + "." + Quote(table);
+                var foreignKeys = new List<string>();
+                using (var query = Command(context, connection, "SELECT name FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID(@table) AND is_disabled = 0"))
+                {
+                    Parameter(query, "@table", qualified);
+                    using var reader = query.ExecuteReader();
+                    while (reader.Read()) foreignKeys.Add(reader.GetString(0));
+                }
+                foreach (var foreignKey in foreignKeys)
+                {
+                    // A plain command: EF's ExecuteSqlRaw would read braces in a name as format placeholders.
+                    using var disable = Command(context, connection, "ALTER TABLE " + qualified + " NOCHECK CONSTRAINT " + Quote(foreignKey));
+                    disable.ExecuteNonQuery();
+                }
             }
             else
             {
-                context.Database.ExecuteSqlRaw("PRAGMA defer_foreign_keys = ON");
+                using var pragma = Command(context, connection, "PRAGMA defer_foreign_keys = ON");
+                pragma.ExecuteNonQuery();
             }
         }
 

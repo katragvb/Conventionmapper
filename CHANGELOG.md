@@ -26,12 +26,13 @@
 
 ### ConventionMapper.Testing.EntityFrameworkCore (new package)
 - **`DatabaseAssert.SavesRoundTrip(context, map, source)`**: maps, inserts inside a rolled-back transaction, reads back, and fails for every value the database changed: a default that replaced a copied `false` (CM0034 in action), cut text, rounded numbers; failed inserts carry the database's message.
-- **`DatabaseAssert.AllMappersSaveRoundTrip(context, typeof(Mappings))`**: `SavesRoundTrip` for every generated create method that returns an entity of the context, with sample data and again with `false` and `0` values (the ones a database default replaces). Foreign keys aren't checked inside the rolled-back transaction, so no rows need seeding.
+- **`DatabaseAssert.AllMappersSaveRoundTrip(context, typeof(Mappings))`**: `SavesRoundTrip` for every generated create method that returns an entity of the context, with sample data and again with `false` and `0` values (the ones a database default replaces). Foreign keys aren't checked inside the rolled-back transaction, so no rows need seeding; CHECK constraints, NOT NULL and unique indexes stay on, so a value the database rejects still fails.
 - **`DatabaseAssert.ModelMatchesDatabase(context)`**: compares the EF Core model's tables and columns (existence, nullability, maximum length on SQL Server, defaults) with the real schema, so a scaffolded model that drifted is found before the generator's warnings mislead. SQL Server and SQLite.
 - **`DatabaseAssert.ExportSchema(context, "schema.json")`** and **`ModelMatchesSchema(context, "schema.json")`**: export the real schema once (from a copy of production), commit the file, and check the model against it in every test run, without a database.
 
 ### Build
-- Every push to `main` publishes `<next version>-preview.<run>` packages to nuget.org (unless that version is already released), so changes can be tried in a real codebase before the release tag.
+- Running the workflow manually on `main` publishes `<next version>-preview.<run>` packages to nuget.org (unless that version is already released), so changes can be tried in a real codebase before the release tag. Previews are published on request because nuget.org keeps every version.
+- A `sqlserver` CI job runs the database checks against a real SQL Server 2022 and is required before packing.
 - After a release tag, the workflow opens a pull request merging `main` into every `feature/*` branch that doesn't contain it yet.
 - Release checklist in [RELEASING.md](https://github.com/katragvb/Conventionmapper/blob/main/RELEASING.md), including trying the preview in a real codebase before tagging.
 - Package validation baselines moved to 1.9.1; the new package validates its API across target frameworks from its first release.
