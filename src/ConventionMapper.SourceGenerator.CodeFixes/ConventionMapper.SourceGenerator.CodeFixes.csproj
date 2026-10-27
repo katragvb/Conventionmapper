@@ -15,4 +15,9 @@
     <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4" PrivateAssets="all" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The CM0029 fix rebuilds the analyzer's plan from the same code. -->
+    <Compile Include="..\Shared\CopyAnalysis.cs" Link="Shared\CopyAnalysis.cs" />
+  </ItemGroup>
+
 </Project>

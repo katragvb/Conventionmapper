@@ -12,11 +12,11 @@
 
     <!-- ===== NuGet package ===== -->
     <PackageId>ConventionMapper.Testing</PackageId>
-    <Version>1.8.0</Version>
+    <Version>1.9.0</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
-    <Description>Test helpers for ConventionMapper and ConventionMapper.SourceGenerator mappings: MapperAssert.WritesExactly fills a source object and checks exactly which destination members a map writes (or compares with the generator's WriteSets), and MapperAssert.AllMethodsCovered fails when a mapping method is never called from the tests. Works with any test framework.</Description>
+    <Description>Test helpers for ConventionMapper and ConventionMapper.SourceGenerator mappings: MapperAssert.WritesExactly checks exactly which destination members a map writes, WritesFrom checks each value comes from the right source member (using the generated lineage), AllMappersMatchWriteSets gives every generated map a baseline test, RoundTrips checks map/reverse-map pairs with randomized inputs, AllMethodsCovered / AllMethodsUsed find untested and unused maps, SampleData.Builder builds test objects fluently, and GeneratedCodeMatches snapshots generated code per mapper. Works with any test framework.</Description>
     <PackageTags>mapper;object-mapper;mapping;testing;unit-testing;source-generator</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -30,6 +30,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion Condition="!$([System.String]::Copy('$(Version)').StartsWith('0.'))">1.8.0</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <ItemGroup>

@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- .NET Standard 2.0 (covers .NET Framework 4.6.1+), plus modern .NET -->
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <!-- Annotations are complete: trimmed and AOT apps get one warning where they create a MapperConfiguration. -->
+    <IsAotCompatible Condition="'$(TargetFramework)' == 'net8.0'">true</IsAotCompatible>
     <LangVersion>latest</LangVersion>
     <Nullable>annotations</Nullable>
     <RootNamespace>ConventionMapper</RootNamespace>
@@ -14,7 +16,7 @@
     <!-- ===== NuGet package metadata ===== -->
     <!-- IMPORTANT: check https://www.nuget.org/packages/<PackageId> is free before publishing, and change it if needed. -->
     <PackageId>ConventionMapper</PackageId>
-    <Version>1.8.0</Version>
+    <Version>1.9.0</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
@@ -37,7 +39,7 @@
     <EnablePackageValidation>true</EnablePackageValidation>
     <!-- Fails the pack when a release breaks the public API of the latest published version.
          Skipped for CI builds (0.0.0-ci.N), whose version is always lower than the baseline. -->
-    <PackageValidationBaselineVersion Condition="!$([System.String]::Copy('$(Version)').StartsWith('0.'))">1.7.0</PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion Condition="!$([System.String]::Copy('$(Version)').StartsWith('0.'))">1.8.0</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <!-- Build-time analyzer + code fixes for the runtime API, shipped in this package under analyzers/dotnet/cs. -->

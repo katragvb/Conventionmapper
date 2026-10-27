@@ -50,7 +50,8 @@ namespace ConventionMapper.Tests.TestingPackage
         [MapIgnore("Internal")]
         public static partial void Update(TpLocation source, TpLocation target);
 
-        [MapInherit(nameof(ToImport))]
+        // ToImport has two overloads: name the one to inherit from.
+        [MapInherit(nameof(ToImport), typeof(TpLocation))]
         public static partial Expression<Func<TpLocation, TpImport>> Projection();
     }
 
@@ -119,6 +120,37 @@ namespace ConventionMapper.Tests.TestingPackage
 
             Assert.Contains("TpUntested.NeverCalled(TpLocation)", error.Message);
             Assert.DoesNotContain("Covered(", error.Message.Replace("NeverCalled", ""));
+        }
+
+        [Fact]
+        public void Every_mapping_method_is_verified_by_a_write_check()
+        {
+            MapperAssert.AllMethodsVerified(typeof(TpMappings), typeof(TestingPackageTests).Assembly);
+        }
+
+        [Fact]
+        public void A_call_without_a_write_check_does_not_count_as_verified()
+        {
+            var error = Assert.Throws<MapperAssertException>(() => MapperAssert.AllMethodsVerified(typeof(TpUntested), typeof(TestingPackageTests).Assembly));
+
+            Assert.Contains("TpUntested.Covered(TpLocation) (called, but not in WritesExactly/UpdatesExactly)", error.Message);
+            Assert.Contains("TpUntested.NeverCalled(TpLocation) (never called)", error.Message);
+        }
+
+        [Fact]
+        public void Typed_write_set_lookup_follows_the_signature()
+        {
+            Assert.Equal(TpMappings.WriteSets["ToImport(TpLocation, string?, decimal?)"],
+                TpMappings.WriteSetOf(nameof(TpMappings.ToImport), typeof(TpLocation), typeof(string), typeof(decimal?)));
+            Assert.Equal(TpMappings.WriteSets["ToSummary"], TpMappings.WriteSetOf(nameof(TpMappings.ToSummary)));
+            Assert.Equal(TpMappings.WriteSets["Update"], MapperAssert.WriteSetOf(typeof(TpMappings), nameof(TpMappings.Update), typeof(TpLocation), typeof(TpLocation)));
+
+            // A changed signature fails with the current overloads instead of silently finding nothing.
+            var changed = Assert.Throws<ArgumentException>(() => TpMappings.WriteSetOf(nameof(TpMappings.ToImport), typeof(TpLocation), typeof(int)));
+            Assert.Contains("Overloads: ToImport(TpLocation), ToImport(TpLocation, string?, decimal?)", changed.Message);
+            Assert.Throws<ArgumentException>(() => TpMappings.WriteSetOf(nameof(TpMappings.ToImport))); // overloaded: types needed
+            var viaAssert = Assert.Throws<MapperAssertException>(() => MapperAssert.WriteSetOf(typeof(TpMappings), "Missing", typeof(int)));
+            Assert.Contains("No generated mapping method is named 'Missing'", viaAssert.Message);
         }
 
         [Fact]

@@ -25,6 +25,6 @@ namespace ConventionMapper
     internal static class TrimMessages
     {
         public const string Message =
-            "ConventionMapper discovers members with reflection and compiles mappings at runtime, which is not compatible with trimming or Native AOT.";
+            "ConventionMapper discovers members with reflection and compiles mappings at runtime, which is not compatible with trimming or Native AOT. Use ConventionMapper.SourceGenerator in trimmed and Native AOT apps.";
     }
 }

@@ -14,7 +14,7 @@
 
     <!-- ===== NuGet package: analyzer-only, no runtime dependency ===== -->
     <PackageId>ConventionMapper.SourceGenerator</PackageId>
-    <Version>1.8.0</Version>
+    <Version>1.9.0</Version>
     <Authors>Katragadda</Authors>
     <Company>Katragadda</Company>
     <Product>ConventionMapper</Product>
@@ -53,7 +53,6 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
     <!-- ConventionMapperGeneratedDocs and ConventionMapperEmitGeneratedCode (see docs/source-generator.md). -->
-    <None Include="build\ConventionMapper.SourceGenerator.props" Pack="true" PackagePath="build\" />
     <None Include="build\ConventionMapper.SourceGenerator.targets" Pack="true" PackagePath="build\" />
   </ItemGroup>
 
@@ -61,4 +60,15 @@
     <InternalsVisibleTo Include="ConventionMapper.Tests" />
   </ItemGroup>
 
+  <!-- The packed props carry the package version (see build/ConventionMapper.SourceGenerator.props and CM0024). -->
+  <Target Name="ConventionMapperVersionedProps" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_ConventionMapperProps>$(IntermediateOutputPath)pack/ConventionMapper.SourceGenerator.props</_ConventionMapperProps>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_ConventionMapperProps)" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)build/ConventionMapper.SourceGenerator.props').Replace('__CONVENTIONMAPPER_VERSION__', '$(PackageVersion)'))" />
+    <ItemGroup>
+      <None Include="$(_ConventionMapperProps)" Pack="true" PackagePath="build\" />
+    </ItemGroup>
+  </Target>
 </Project>

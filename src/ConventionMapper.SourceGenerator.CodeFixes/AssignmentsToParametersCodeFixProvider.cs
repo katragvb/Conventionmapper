@@ -18,7 +18,8 @@ namespace ConventionMapper.SourceGenerator.CodeFixes
     /// <summary>
     /// CM0023: turns <c>var x = s.ToY(); x.A = a; x.B = b;</c> into <c>var x = s.ToY(a, b);</c>. Adds the overload
     /// <c>[MapInherit(nameof(ToY))] Y ToY(S s, A a, B b)</c> to the mapper (unless one with those parameters exists), so other
-    /// callers keep working and the configuration is shared.
+    /// callers keep working and the configuration is shared. When ToY is already overloaded, the attribute names it by its
+    /// parameter types: <c>[MapInherit(nameof(ToY), typeof(S))]</c>.
     /// </summary>
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(AssignmentsToParametersCodeFixProvider))]
     public sealed class AssignmentsToParametersCodeFixProvider : CodeFixProvider
@@ -108,8 +109,17 @@ namespace ConventionMapper.SourceGenerator.CodeFixes
                     .WithAttributeLists(default)
                     .WithLeadingTrivia(SyntaxFactory.Whitespace(SyntaxHelpers.Indentation(declaration)))
                     .WithParameterList(declaration.ParameterList.AddParameters(parameters.ToArray()));
+                // When the mapping method already has overloads, [MapInherit] must name it by its parameter types (CM0019).
+                var overloaded = method.ContainingType.GetMembers(method.Name).OfType<IMethodSymbol>().Count() > 1;
+                var inheritArguments = "nameof(" + method.Name + ")";
+                if (overloaded)
+                    foreach (var p in method.Parameters)
+                    {
+                        var type = p.Type.IsReferenceType ? p.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated) : p.Type;
+                        inheritArguments += ", typeof(" + (mapperModel != null ? type.ToMinimalDisplayString(mapperModel, declaration.SpanStart) : type.ToDisplayString()) + ")";
+                    }
                 overload = SyntaxHelpers.AddAttribute(overload, SyntaxFactory.Attribute(SyntaxFactory.IdentifierName("MapInherit"),
-                    SyntaxFactory.ParseAttributeArgumentList("(nameof(" + method.Name + "))")));
+                    SyntaxFactory.ParseAttributeArgumentList("(" + inheritArguments + ")")));
                 overload = overload.WithLeadingTrivia(new[] { SyntaxFactory.EndOfLine("\n") }.Concat(overload.GetLeadingTrivia()))
                     .WithAdditionalAnnotations(Formatter.Annotation);
                 mapperEditor.InsertAfter(declaration, overload);

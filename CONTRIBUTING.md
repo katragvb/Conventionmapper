@@ -10,6 +10,10 @@ Open an issue with the bug template. The fastest fix comes from a small, complet
 
 Open an issue with the feature template and describe the problem first, then the API you have in mind. Small examples of how you would call it help a lot.
 
+Check [ROADMAP.md](ROADMAP.md) for planned work, and [docs/adr](docs/adr/README.md) for the design rules (guesses are errors, caller-owned values are parameters, explicit mode and the others). A proposal that changes one of those rules should say which, and why; accepted changes get a new decision record.
+
+A new diagnostic needs a section in [docs/diagnostics.md](docs/diagnostics.md) with the cause, an example and the fix; a test checks that every code has one.
+
 ## Pull requests
 
 1. Open an issue first for anything bigger than a small fix, so the approach can be agreed before you write code.

@@ -100,6 +100,95 @@ namespace Shop
             Assert.Contains("[MapExplicit(\"Id\", nameof(OrderDto.Name))]", text);
         }
 
+        // ------------------------------------------------------------------ CM0026 suggest [Sensitive]
+
+        private const string PersonModels = @"namespace People
+{
+    public class Person
+    {
+        public int Id { get; set; }
+        public string StrSsn { get; set; } = """";
+        public string Email { get; set; } = """";
+        public System.DateTime DtDateOfBirth { get; set; }
+        public System.DateTime CreatedOn { get; set; }
+        public bool HasEmail { get; set; }
+        [ConventionMapper.Sensitive] public string Phone { get; set; } = """";
+    }
+    public class PersonDto
+    {
+        public int Id { get; set; }
+        public string StrSsn { get; set; } = """";
+        public string Email { get; set; } = """";
+        public System.DateTime DtDateOfBirth { get; set; }
+        public System.DateTime CreatedOn { get; set; }
+        public bool HasEmail { get; set; }
+        [ConventionMapper.Sensitive] public string Phone { get; set; } = """";
+    }
+}
+";
+
+        private const string PersonMapper = @"using ConventionMapper;
+namespace People
+{
+    [GeneratedMapper]
+    public static partial class PersonMapper
+    {
+        public static partial PersonDto ToDto(Person person);
+    }
+}";
+
+        [Fact]
+        public async Task Personal_looking_members_are_suggested_as_sensitive()
+        {
+            var project = CreateProject(("Models.cs", PersonModels), ("Mapper.cs", PersonMapper));
+            var (diagnostics, _) = await RunGenerator(project);
+            var suggestions = diagnostics.Where(d => d.Id == "CM0026").ToList();
+
+            Assert.All(suggestions, d => Assert.Equal(DiagnosticSeverity.Info, d.Severity));
+            var named = suggestions.Select(d => d.GetMessage()).ToList();
+            // Hungarian prefixes are stripped (StrSsn, DtDateOfBirth); bools, non-birth dates and marked members are skipped.
+            Assert.Equal(6, named.Count);
+            foreach (var member in new[] { "Person.StrSsn", "Person.Email", "Person.DtDateOfBirth", "PersonDto.StrSsn", "PersonDto.Email", "PersonDto.DtDateOfBirth" })
+                Assert.Contains(named, m => m.Contains("'" + member + "'") || m.Contains(member));
+            Assert.DoesNotContain(named, m => m.Contains("HasEmail") || m.Contains("CreatedOn") || m.Contains("Phone"));
+        }
+
+        [Fact]
+        public async Task Suggested_member_can_be_marked_sensitive()
+        {
+            var project = CreateProject(("Models.cs", PersonModels), ("Mapper.cs", PersonMapper));
+            var (diagnostics, _) = await RunGenerator(project);
+            var ssn = diagnostics.First(d => d.Id == "CM0026" && d.GetMessage().Contains("Person.StrSsn") && !d.GetMessage().Contains("PersonDto"));
+            var document = project.Documents.Single(d => d.Name == "Models.cs");
+
+            var action = Assert.Single(await Fixes(new GeneratorCodeFixProvider(), document, ssn));
+            Assert.Equal("Mark [Sensitive]", action.Title);
+            var solution = await Apply(action);
+            var text = await Text(solution, "Models.cs");
+            Assert.Contains("        [Sensitive]\n        public string StrSsn { get; set; } = \"\";", text.Replace("\r\n", "\n"));
+            Assert.StartsWith("using ConventionMapper;\n", text.Replace("\r\n", "\n"));
+
+            // Fixed code compiles and the member is no longer suggested.
+            var (after, output) = await RunGenerator(solution.Projects.Single());
+            Assert.Empty(output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+            Assert.DoesNotContain(after, d => d.Id == "CM0026" && d.GetMessage().Contains("Person.StrSsn") && !d.GetMessage().Contains("PersonDto"));
+        }
+
+        [Fact]
+        public async Task Members_with_attributes_get_sensitive_as_the_first_attribute()
+        {
+            var models = PersonModels.Replace("public string Email { get; set; } = \"\";\n        public System.DateTime DtDateOfBirth",
+                "[System.ComponentModel.DataAnnotations.MaxLength(100)]\n        public string Email { get; set; } = \"\";\n        public System.DateTime DtDateOfBirth");
+            var project = CreateProject(("Models.cs", "using ConventionMapper;\n" + models), ("Mapper.cs", PersonMapper));
+            var (diagnostics, _) = await RunGenerator(project);
+            var email = diagnostics.First(d => d.Id == "CM0026" && d.GetMessage().Contains("Person.Email") && !d.GetMessage().Contains("PersonDto"));
+
+            var action = Assert.Single(await Fixes(new GeneratorCodeFixProvider(), project.Documents.Single(d => d.Name == "Models.cs"), email));
+            var text = (await Text(await Apply(action), "Models.cs")).Replace("\r\n", "\n");
+            Assert.Contains("        [Sensitive]\n        [System.ComponentModel.DataAnnotations.MaxLength(100)]\n        public string Email", text);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "using ConventionMapper;"));
+        }
+
         // ------------------------------------------------------------------ CM0001 fixes
 
         [Fact]
@@ -222,6 +311,23 @@ namespace Shop
 
             Assert.Equal(mapper, await Text(solution, "Mapper.cs"));
             Assert.Contains("order.ToDto(note, 5)", await Text(solution, "Use.cs"));
+        }
+
+        [Fact]
+        public async Task The_new_overload_names_its_parent_when_the_parent_is_overloaded()
+        {
+            var mapper = AssignModels.Replace("public static partial OrderDto ToDto(this Order order);",
+                "public static partial OrderDto ToDto(this Order order);\n        [MapInherit(nameof(ToDto), typeof(Order))] public static partial OrderDto ToDto(this Order order, int priority);");
+            var project = CreateProject(("Mapper.cs", mapper), ("Use.cs", AssignUse.Replace("            dto.Priority = 5;\n", "")));
+            var (_, output) = await RunGenerator(project);
+            var diagnostic = (await output.WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new AssignmentsAfterMapAnalyzer())).GetAnalyzerDiagnosticsAsync()).Single();
+
+            var solution = await Apply(Assert.Single(await Fixes(new AssignmentsToParametersCodeFixProvider(), project.Documents.Single(d => d.Name == "Use.cs"), diagnostic)));
+
+            Assert.Contains("[MapInherit(nameof(ToDto), typeof(Order))]\n        public static partial OrderDto ToDto(this Order order, string? note);", (await Text(solution, "Mapper.cs")).Replace("\r", ""));
+            var (diagnostics, built) = await RunGenerator(solution.Projects.Single());
+            Assert.DoesNotContain(diagnostics, d => d.Severity >= DiagnosticSeverity.Warning);
+            Assert.Empty(built.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
         }
 
         [Fact]

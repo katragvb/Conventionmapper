@@ -16,14 +16,18 @@ namespace ConventionMapper.SourceGenerator.CodeFixes
     /// CM0001 (unmapped member): "Ignore 'X'", "Ignore all N unmapped members", "Map only the mapped members ([MapExplicit])",
     /// and in explicit mode "Remove 'X' from [MapExplicit]".
     /// CM0020 (member name as a string): "Use nameof(Type.Member)", fixable across a document, project or solution.
+    /// CM0026 (member looks like personal data): "Mark [Sensitive]".
+    /// CM0033 (undocumented destination member copied from a documented one): "Copy documentation from 'X'".
     /// </summary>
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(GeneratorCodeFixProvider))]
     public sealed class GeneratorCodeFixProvider : CodeFixProvider
     {
         private const string UnmappedMemberId = "CM0001";
         private const string UseNameofId = "CM0020";
+        private const string SuggestSensitiveId = "CM0026";
+        private const string CopyDocumentationId = "CM0033";
 
-        public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UnmappedMemberId, UseNameofId);
+        public override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(UnmappedMemberId, UseNameofId, SuggestSensitiveId, CopyDocumentationId);
 
         public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
@@ -37,6 +41,25 @@ namespace ConventionMapper.SourceGenerator.CodeFixes
             foreach (var diagnostic in context.Diagnostics)
             {
                 var node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
+                if (diagnostic.Id == CopyDocumentationId)
+                {
+                    var target = (MemberDeclarationSyntax?)node.FirstAncestorOrSelf<PropertyDeclarationSyntax>() ?? node.FirstAncestorOrSelf<FieldDeclarationSyntax>();
+                    if (target == null || !diagnostic.Properties.TryGetValue("Summary", out var summary) || summary == null) continue;
+                    diagnostic.Properties.TryGetValue("Source", out var from);
+                    context.RegisterCodeFix(
+                        CodeAction.Create("Copy documentation from '" + from + "'", ct => CopyDocumentationAsync(context.Document, target, summary, from ?? "", ct), CopyDocumentationId),
+                        diagnostic);
+                    continue;
+                }
+                if (diagnostic.Id == SuggestSensitiveId)
+                {
+                    var declaration = (MemberDeclarationSyntax?)node.FirstAncestorOrSelf<PropertyDeclarationSyntax>() ?? node.FirstAncestorOrSelf<FieldDeclarationSyntax>();
+                    if (declaration == null) continue;
+                    context.RegisterCodeFix(
+                        CodeAction.Create("Mark [Sensitive]", ct => MarkSensitiveAsync(context.Document, declaration, ct), SuggestSensitiveId),
+                        diagnostic);
+                    continue;
+                }
                 if (diagnostic.Id == UseNameofId &&
                     diagnostic.Properties.TryGetValue("Type", out var type) && type != null &&
                     diagnostic.Properties.TryGetValue("Member", out var nameofMember) && nameofMember != null &&
@@ -125,6 +148,49 @@ namespace ConventionMapper.SourceGenerator.CodeFixes
             }
             if (!method.ReturnsVoid) return method.ReturnType;
             return method.Parameters.Length >= 2 ? method.Parameters[1].Type : null;
+        }
+
+        private static async Task<Document> CopyDocumentationAsync(Document document, MemberDeclarationSyntax declaration, string summary, string from, CancellationToken ct)
+        {
+            var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
+            if (root == null) return document;
+            var newLine = root.ToFullString().Contains("\r\n") ? "\r\n" : "\n";
+            var indent = SyntaxHelpers.Indentation(declaration);
+            string Escape(string text) => text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+            var docs = indent + "/// <summary>" + newLine +
+                       indent + "/// " + Escape(summary) + newLine +
+                       indent + "/// </summary>" + newLine +
+                       indent + "/// <remarks>Copied from <c>" + Escape(from) + "</c>.</remarks>" + newLine + indent;
+
+            // Keep what precedes the member (blank lines, comments) and replace its indentation with the docs and indentation.
+            var leading = declaration.GetLeadingTrivia().ToList();
+            while (leading.Count > 0 && leading[leading.Count - 1].IsKind(SyntaxKind.WhitespaceTrivia)) leading.RemoveAt(leading.Count - 1);
+            leading.AddRange(SyntaxFactory.ParseLeadingTrivia(docs));
+            return document.WithSyntaxRoot(root.ReplaceNode(declaration, declaration.WithLeadingTrivia(leading)));
+        }
+
+        private static async Task<Document> MarkSensitiveAsync(Document document, MemberDeclarationSyntax declaration, CancellationToken ct)
+        {
+            var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false) as CompilationUnitSyntax;
+            if (root == null) return document;
+            var list = SyntaxFactory.AttributeList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Attribute(SyntaxFactory.IdentifierName("Sensitive"))));
+            MemberDeclarationSyntax updated;
+            if (declaration.AttributeLists.Count > 0)
+            {
+                updated = declaration.WithAttributeLists(new SyntaxList<AttributeListSyntax>(new[] { list.WithLeadingTrivia(declaration.AttributeLists[0].GetLeadingTrivia()).WithTrailingTrivia(SyntaxFactory.Space) }
+                    .Concat(declaration.AttributeLists.Select((a, i) => i == 0 ? a.WithLeadingTrivia() : a))));
+            }
+            else
+            {
+                // On the same line, before the modifiers: "[Sensitive] public string Ssn { get; set; }".
+                updated = declaration.WithoutLeadingTrivia()
+                    .WithAttributeLists(SyntaxFactory.SingletonList(list.WithLeadingTrivia(declaration.GetLeadingTrivia()).WithTrailingTrivia(SyntaxFactory.Space)));
+            }
+            var newRoot = root.ReplaceNode(declaration, updated);
+            if (!newRoot.Usings.Any(u => u.Name?.ToString() == "ConventionMapper") &&
+                !declaration.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().Any(n => n.Name.ToString() == "ConventionMapper" || n.Name.ToString().StartsWith("ConventionMapper.", StringComparison.Ordinal)))
+                newRoot = newRoot.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("ConventionMapper")).WithTrailingTrivia(SyntaxFactory.EndOfLine("\n")));
+            return document.WithSyntaxRoot(newRoot);
         }
 
         private static async Task<Document> ChangeMethodAsync(Document document, MethodDeclarationSyntax method, Func<MethodDeclarationSyntax, MethodDeclarationSyntax> change, CancellationToken ct)

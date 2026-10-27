@@ -1,6 +1,17 @@
 <Project>
-  <!-- Lets the source generator read <ConventionMapperGeneratedDocs>true</ConventionMapperGeneratedDocs>. -->
+  <!--
+    ConventionMapperSourceGeneratorVersion is the package version (written when the package is packed). The generator compares
+    it with its own version and reports CM0024 when an IDE still runs an older generator after an upgrade.
+  -->
+  <PropertyGroup>
+    <ConventionMapperSourceGeneratorVersion>__CONVENTIONMAPPER_VERSION__</ConventionMapperSourceGeneratorVersion>
+  </PropertyGroup>
+
+  <!-- Lets the source generator read these MSBuild properties. -->
   <ItemGroup>
     <CompilerVisibleProperty Include="ConventionMapperGeneratedDocs" />
+    <CompilerVisibleProperty Include="ConventionMapperSourceGeneratorVersion" />
+    <CompilerVisibleProperty Include="ConventionMapperExcludeFromCodeCoverage" />
+    <CompilerVisibleProperty Include="ConventionMapperEmbedGeneratedCode" />
   </ItemGroup>
 </Project>
